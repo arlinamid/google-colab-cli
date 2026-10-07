@@ -37,8 +37,6 @@ the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
 import contextlib
 import os
 from pathlib import Path
-import select
-import shlex
 import signal
 import subprocess
 import sys
@@ -48,6 +46,7 @@ from urllib.parse import urlparse
 import uuid
 
 from colab_cli.state import SessionState
+from colab_cli.terminal import join_argv
 import typer
 from typing_extensions import Annotated
 import websocket
@@ -93,9 +92,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -346,6 +343,33 @@ def _close_quietly(ws: websocket.WebSocket) -> None:
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
 
 
+def _pump_stdin_to_ws(ws: websocket.WebSocket, read=os.read, fileno=None) -> None:
+    """Copy stdin bytes onto the WebSocket until EOF.
+
+    A blocking ``os.read`` is equivalent to ``select`` on a single fd with no
+    timeout, and it works on Windows. ``select.select`` only accepts sockets
+    there, so calling it on the stdin handle raises ``OSError`` and the pump
+    thread dies immediately — ``colab ssh --proxy-mode`` then accepts output
+    but never forwards keystrokes (upstream issues #85 / #100, PR #158).
+
+    Args:
+      ws: The connected WebSocket to write binary frames to.
+      read: Byte reader, injectable in tests. Defaults to ``os.read``.
+      fileno: Stdin fd. Defaults to ``sys.stdin.buffer.fileno()``.
+    """
+    stdin_fd = sys.stdin.buffer.fileno() if fileno is None else fileno
+    try:
+        while True:
+            data = read(stdin_fd, 8192)
+            if not data:
+                break
+            ws.send_binary(data)
+    except (OSError, websocket.WebSocketException):
+        pass
+    finally:
+        _close_quietly(ws)
+
+
 def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     """Bridges the WebSocket <-> stdin/stdout as an OpenSSH ProxyCommand.
 
@@ -355,24 +379,8 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     Returns:
       0 when either side closes.
     """
-    stdin_fd = sys.stdin.buffer.fileno()
 
-    def stdin_to_ws():
-        try:
-            while True:
-                ready, _, _ = select.select([stdin_fd], [], [], None)
-                if not ready:
-                    continue
-                data = os.read(stdin_fd, 8192)
-                if not data:
-                    break
-                ws.send_binary(data)
-        except (OSError, websocket.WebSocketException):
-            pass
-        finally:
-            _close_quietly(ws)
-
-    threading.Thread(target=stdin_to_ws, daemon=True).start()
+    threading.Thread(target=_pump_stdin_to_ws, args=(ws,), daemon=True).start()
 
     try:
         while True:
@@ -409,7 +417,9 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
-    return shlex.join(self_cmd)
+    # POSIX OpenSSH re-parses this with /bin/sh. Windows OpenSSH uses cmd.exe,
+    # which does not honor single quotes.
+    return join_argv(self_cmd)
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
@@ -421,7 +431,9 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
-        "UserKnownHostsFile=/dev/null",
+        # ``/dev/null`` on POSIX, ``nul`` on Windows. Windows OpenSSH rejects
+        # a POSIX null path for the known-hosts file.
+        f"UserKnownHostsFile={os.devnull}",
         "-o",
         "LogLevel=ERROR",
     ]
@@ -482,9 +494,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -546,16 +556,19 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
         do_rm()
         os._exit(0)
 
-    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+    # Windows has SIGINT and SIGTERM but not SIGHUP. Looking the name up
+    # with getattr avoids AttributeError while evaluating the signal list.
+    for name in ("SIGHUP", "SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
         try:
             signal.signal(sig, _on_signal)
         except (ValueError, OSError):
             pass  # e.g. not running in the main thread
 
 
-def _run_proxy_bridge(
-    s: SessionState, identity: Optional[str], rm: bool
-) -> int:
+def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int:
     """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
 
     Args:
