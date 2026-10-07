@@ -167,7 +167,7 @@ def run_automation(
                     sys.stderr.write(f"{ename}: {evalue}\n")
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
         runtime.stop()
 
 

@@ -391,6 +391,7 @@ def run_command(
     runtime = ColabRuntime(
         s.url,
         s.token,
+        session_name=s.name,
         kernel_id=s.kernel_id,
         session_id=s.session_id,
         on_kernel_started=on_started,
@@ -444,7 +445,7 @@ def run_command(
             )
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
         # Best-effort runtime close (keeps remote kernel alive for --keep).
         try:
             runtime.stop()
@@ -473,7 +474,9 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         # The script may have outlived the proxy token.
         fresh = state.get_session(name, ignore_missing_session=True)
         if fresh:
-            rt = ColabRuntime(fresh.url, fresh.token, kernel_id=fresh.kernel_id)
+            rt = ColabRuntime(
+                fresh.url, fresh.token, kernel_id=fresh.kernel_id, session_name=fresh.name
+            )
             rt.stop(shutdown_kernel=True)
     except Exception:
         pass

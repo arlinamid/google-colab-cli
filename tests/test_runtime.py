@@ -215,3 +215,43 @@ def test_colab_runtime_stdin_logging():
     mock_history.log_event.assert_any_call(
         "test-s", "input_reply", {"value": "user input"}
     )
+
+
+def _runtime_with_kernel(kernel):
+    runtime = ColabRuntime("http://url", "token123", session_name="s1")
+    runtime._kernel_client = kernel
+    return runtime
+
+
+def test_execute_code_names_a_dropped_connection():
+    """jupyter_kernel_client raises a bare RuntimeError when the kernel
+    websocket drops (e.g. `colab stop` mid-run); surface it as
+    SessionConnectionLost so the CLI can explain it instead of a traceback."""
+    import pytest
+
+    from colab_cli.runtime import SessionConnectionLost
+
+    kernel = MagicMock()
+    kernel.execute_interactive.side_effect = RuntimeError("Connection was lost.")
+    kernel.execute.side_effect = RuntimeError("Connection was lost.")
+    runtime = _runtime_with_kernel(kernel)
+
+    with pytest.raises(SessionConnectionLost) as exc:
+        runtime.execute_code("1", output_hook=lambda o: None)
+    assert exc.value.session_name == "s1"
+    with pytest.raises(SessionConnectionLost):
+        runtime.execute_code("1")
+
+
+def test_execute_code_keeps_other_runtime_errors():
+    import pytest
+
+    from colab_cli.runtime import SessionConnectionLost
+
+    kernel = MagicMock()
+    kernel.execute.side_effect = RuntimeError("something else")
+    runtime = _runtime_with_kernel(kernel)
+
+    with pytest.raises(RuntimeError, match="something else") as exc:
+        runtime.execute_code("1")
+    assert not isinstance(exc.value, SessionConnectionLost)
