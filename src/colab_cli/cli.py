@@ -23,7 +23,16 @@ from typing_extensions import Annotated
 from colab_cli import auto_update
 from colab_cli.auth import AuthProvider
 from colab_cli.common import state, setup_logging
-from colab_cli.commands import session, execution, files, automation, run, ssh, utility, usage
+from colab_cli.commands import (
+    session,
+    execution,
+    files,
+    automation,
+    run,
+    ssh,
+    utility,
+    usage,
+)
 
 
 class AlphabeticalGroup(TyperGroup):
@@ -80,6 +89,12 @@ def callback(
     """
     Colab CLI global configuration.
     """
+    # ANSI colors and cursor control in cmd.exe / Windows PowerShell 5.1.
+    # No-op on Linux, macOS, and consoles that already have virtual-terminal
+    # processing enabled.
+    from colab_cli.terminal import enable_windows_virtual_terminal
+
+    enable_windows_virtual_terminal()
     state.client_oauth_config = client_oauth_config
     state.config_path = config
     state.logtostderr = logtostderr

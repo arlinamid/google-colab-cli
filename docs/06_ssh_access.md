@@ -1,5 +1,7 @@
 ---
 log:
+2026-10-07: Windows ProxyCommand. `select()` on the stdin fd raises on Windows (only sockets are selectable), which killed the `--proxy-mode` input pump. The pump now blocks in `os.read`. The ProxyCommand string is quoted with `subprocess.list2cmdline` on Windows because OpenSSH there re-parses it with cmd.exe, and `UserKnownHostsFile` uses `os.devnull` (`nul`) instead of `/dev/null`. `--rm` signal installation skips `SIGHUP` when the interpreter does not define it.
+
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
 2026-07-17: Initial design and implementation of `colab ssh` — client side of SSH-over-WebSocket runtime access. Adds three modes (interactive shell, `-s SESSION`, and `--proxy-mode` OpenSSH ProxyCommand bridge), `--identity/-i` key selection, and per-HTTP-status handshake error messages. Server side is out of scope for this repo; the subcommand is a no-op against runtimes that do not expose the `/colab/ssh` endpoint (surfaces an actionable HTTP 404 message).

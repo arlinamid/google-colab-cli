@@ -1,5 +1,7 @@
 ---
 log:
+2026-10-07: Drive mount fixes for upstream issues #113, #103, and #108. `drive.mount` is now called with `timeout_ms=600000` so the kernel's `blocking_request` does not give up at the 120s default while the user is still in the browser (that produced `ValueError: mount failed` with an empty reason). The propagation handshake runs on a daemon thread so it does not block the websocket recv loop. The consent URL is opened in the system browser when one is available (`os.startfile` on Windows, `open` on macOS, `xdg-open` elsewhere) and the prompt names the `login_hint` account. HTTP 400 is explained as a multi-account browser mismatch instead of dumping Google's HTML error page, and an error `colab_reply` unblocks the kernel immediately. Optional `--authuser N` rewrites the consent URL only when the user asks; the propagation request's `authuser` parameter was shown in #103 not to fix the 400 by itself, and the URL is not forced to `authuser=0`. The Enter prompt reads `/dev/tty` on POSIX and `CONIN$` on Windows.
+
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
 2026-06-11: Replaced the `oauth2` provider's `run_local_server()` (localhost redirect) with a remote copy-paste flow (`_run_remote_flow` in `auth.py`). The CLI now prints an authorization URL built with `redirect_uri=https://sdk.cloud.google.com/applicationdefaultauthcode.html` and `token_usage=remote`, then reads the pasted authorization code via `input()` and exchanges it with `flow.fetch_token(code=...)`. This is the same flow `gcloud auth application-default login` uses and works identically in local and remote/headless/container environments, removing the heuristic of whether to auto-open a browser. Confirmed server-side acceptance with a live GET-only check against the bundled cloud-SDK client (`764086051850-...`); the OOB redirect and a non-bundled client id were both verified to be rejected (`OOB flow has been blocked` / `redirect_uri_mismatch`). Unit tests in `tests/test_auth.py` assert no localhost server is started, the redirect URI + `token_usage=remote` are set, and the pasted code is exchanged.
@@ -116,7 +118,7 @@ How each provider supplies the scope:
 -   **Action**: Execute `drive.mount()` and transparently proxy Colab's
     proprietary credential propagation flow.
 -   **Code**: `python from google.colab import drive
-    drive.mount('/content/drive')`
+    drive.mount('/content/drive', timeout_ms=600000)`
 -   **Handling**: Because `drivefs` enforces the ephemeral side-channel
     propagation (`colab_request` over websocket), the CLI intercepts these
     messages using `ColabRuntime.colab_request_hook`. When intercepted, the CLI
@@ -128,7 +130,27 @@ How each provider supplies the scope:
     user is OAuthing in their browser. To avoid the upstream 10s
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
     subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
-    `ColabRuntime.execute_code`. Same applies to `colab auth`.
+    `ColabRuntime.execute_code`. Same applies to `colab auth`. Separately,
+    `google.colab.drive.mount` defaults `timeout_ms` to 120000 and that budget
+    is the `blocking_request` wait, which includes the browser step. The
+    injected call passes `timeout_ms=600000` so the kernel does not abandon
+    the mount at two minutes and then fail with `ValueError: mount failed`.
+-   **Where the prompt runs**: The `colab_request` hook returns immediately
+    and finishes propagation on a daemon thread. The websocket recv loop stays
+    free to deliver the kernel's later output.
+-   **Consent UX**: The CLI prints the `unauthorized_redirect_uri`, highlights
+    the `login_hint` account, and tries to open that URL in the GUI browser.
+    The user presses Enter on the controlling terminal (`/dev/tty` or, on
+    Windows, `CONIN$`).
+-   **Multi-account 400**: Propagation HTTP 400 means the browser's active
+    Google account was not the CLI account. The CLI says so and replies to
+    the kernel with an error `colab_reply` instead of dumping the HTML body
+    and leaving `drive.mount` to time out. `--authuser N` is an opt-in that
+    appends `authuser` to the consent URL; it is not applied by default.
+-   **What still depends on Google**: The CLI cannot make the browser
+    attribute the gsession to `login_hint` when a different account is active.
+    The user has to pick the matching account on the chooser. There is no
+    fully non-interactive Drive mount; the ephemeral consent page is required.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 
@@ -291,8 +313,13 @@ TDD is mandatory for all automation features.
 -   **Test Case**: Verify `colab install` correctly injects `pip install` or `uv
     install` commands to the remote VM kernel.
 -   **Test Case**: Verify `colab drivemount` correctly injects `drive.mount()`
-    commands and registers the `colab_request_hook` to intercept credential
-    propagation events.
+    commands with `timeout_ms` of at least 10 minutes and registers the
+    `colab_request_hook` to intercept credential propagation events.
+-   **Test Case**: A propagation HTTP 400 produces an account-mismatch message
+    (no raw HTML dump) and a `colab_reply` that carries `error`, so the kernel
+    does not sit until `timeout_ms`.
+-   **Test Case**: `--authuser` rewrites the consent URL; the default path
+    leaves the server-built URL unchanged.
 
 ### 2. History Capture
 

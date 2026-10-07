@@ -143,9 +143,7 @@ def test_resolve_pubkey_default_scan_key_order(
     if present:
         content = f"ssh-key-content-for-{present}\n"
         (ssh_dir / present).write_text(content)
-    monkeypatch.setattr(
-        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
-    )
+    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
     if expect_found:
         assert ssh_module._resolve_pubkey(None) == content.strip()
     else:
@@ -233,6 +231,42 @@ def test_bridge_proxy_mode_pumps_ws_to_stdout(mocker):
     assert rc == 0
     assert fake_stdout.buffer.getvalue() == b"hello world"
     ws.close.assert_called()
+
+
+def test_pump_stdin_uses_blocking_read_not_select():
+    """Windows ``select()`` cannot wait on a pipe. The ProxyCommand pump must
+    block in ``os.read`` instead, or stdin never reaches the runtime."""
+    import inspect
+
+    assert "select.select(" not in inspect.getsource(ssh_module._bridge_proxy_mode)
+    assert "select.select(" not in inspect.getsource(ssh_module._pump_stdin_to_ws)
+
+    ws = MagicMock()
+    chunks = [b"hello", b""]
+    ssh_module._pump_stdin_to_ws(ws, read=lambda fd, n: chunks.pop(0), fileno=0)
+    ws.send_binary.assert_called_once_with(b"hello")
+    ws.close.assert_called()
+
+
+def test_proxy_command_windows_cmd_quoting(mocker):
+    """Windows OpenSSH parses ProxyCommand with cmd.exe."""
+    mocker.patch("colab_cli.terminal.is_windows", return_value=True)
+    cmd = ssh_module._proxy_command(_make_session(name="my session"), None)
+    assert '"my session"' in cmd
+    assert "'" not in cmd
+
+
+def test_install_rm_handlers_ignores_missing_sighup(mocker):
+    """Windows has no SIGHUP. Installing --rm handlers must not raise."""
+    import signal
+
+    mocker.patch("colab_cli.commands.ssh.signal.SIGHUP", None)
+    sigmock = mocker.patch("colab_cli.commands.ssh.signal.signal")
+    ssh_module._install_rm_signal_handlers(lambda: None)
+    registered = {call.args[0] for call in sigmock.call_args_list}
+    assert None not in registered
+    assert signal.SIGTERM in registered
+    assert signal.SIGINT in registered
 
 
 # --- ProxyCommand shell quoting ---------------------------------------------
@@ -343,18 +377,14 @@ def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker):
     connect = mocker.patch.object(
         ssh_module, "_connect_websocket", return_value=fake_ws
     )
-    bridge = mocker.patch.object(
-        ssh_module, "_bridge_proxy_mode", return_value=0
-    )
+    bridge = mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
     ssh_subprocess = mocker.patch.object(ssh_module, "_run_interactive_ssh")
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
     assert result.exit_code == 0
     connect.assert_called_once()
     args, _ = connect.call_args
-    assert args[0].startswith(
-        "wss://abc-foo.colab.googleusercontent.com/colab/ssh"
-    )
+    assert args[0].startswith("wss://abc-foo.colab.googleusercontent.com/colab/ssh")
     assert args[1] == fake_pub
     bridge.assert_called_once_with(fake_ws)
     ssh_subprocess.assert_not_called()
@@ -401,9 +431,7 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
         captured["url"] = url
         return MagicMock()
 
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", side_effect=fake_connect
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", side_effect=fake_connect)
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
@@ -430,9 +458,7 @@ def test_ssh_handshake_400_emits_actionable_message(
         ssh_module, "_resolve_pubkey", return_value="ssh-rsa AAAAfake u@h"
     )
 
-    err = websocket.WebSocketBadStatusException(
-        "Handshake status 400 Bad Request", 400
-    )
+    err = websocket.WebSocketBadStatusException("Handshake status 400 Bad Request", 400)
     err.status_code = 400
     err.resp_body = resp_body
     mocker.patch.object(websocket.WebSocket, "connect", side_effect=err)
