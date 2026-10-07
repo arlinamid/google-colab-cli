@@ -22,6 +22,7 @@ line read used by interactive prompts.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,3 +243,73 @@ def join_argv(argv: list[str], *, windows: Optional[bool] = None) -> str:
     import shlex
 
     return shlex.join(argv)
+
+
+def split_windows_command_line(cmd: str) -> list[str]:
+    """Split ``cmd`` the way a Windows program splits its own command line.
+
+    ``shlex.split`` treats backslashes as escapes, so an unquoted
+    ``C:\\tools\\edit.exe`` would lose its path separators. This uses
+    ``CommandLineToArgvW``, the inverse of ``subprocess.list2cmdline``.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.windll.shell32
+    shell32.CommandLineToArgvW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    argc = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(cmd, ctypes.byref(argc))
+    if not argv:
+        raise OSError(ctypes.get_last_error(), f"Cannot parse command line: {cmd!r}")
+    try:
+        return [argv[i] for i in range(argc.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(argv)
+
+
+# Sequences a terminal answers by typing the reply into its own input:
+# DA1/DA2/DA3 (CSI c, CSI > c, CSI = c), XTVERSION (CSI > q), DSR/CPR
+# (CSI n) and OSC color queries (OSC Ps [; Pn] ; ? ST). tmux on the runtime sends
+# several of these when the console attaches.
+_TERMINAL_QUERY = re.compile(
+    r"\x1b\[[>=]?[0-9;]*c"
+    r"|\x1b\[>[0-9;]*q"
+    r"|\x1b\[[0-9;]*n"
+    r"|\x1b\][0-9]+(?:;[0-9]+)*;\?(?:\x07|\x1b\\)"
+)
+# A query cut off at the end of a websocket message.
+_PARTIAL_QUERY = re.compile(r"\x1b(?:\[[>=]?[0-9;]*|\][0-9;]*\??\x1b?)?\Z")
+_MAX_PENDING = 32
+
+
+class TerminalQueryFilter:
+    """Remove terminal queries from a stream of output chunks.
+
+    Used when ``colab console`` reads piped stdin. The local terminal still
+    answers the queries, but the answers go to the terminal's input, which
+    the CLI is not reading, so they cannot reach the remote side. They are
+    left behind and show up in whatever reads the terminal next (the shell
+    prompt, the next command's Enter prompt). Dropping the queries avoids
+    that. A sequence split across chunks is held back until it completes.
+    """
+
+    def __init__(self) -> None:
+        self._pending = ""
+
+    def feed(self, text: str) -> str:
+        text = self._pending + text
+        self._pending = ""
+        partial = _PARTIAL_QUERY.search(text)
+        if partial and len(text) - partial.start() <= _MAX_PENDING:
+            self._pending = text[partial.start() :]
+            text = text[: partial.start()]
+        return _TERMINAL_QUERY.sub("", text)
+
+    def flush(self) -> str:
+        """Return held-back text that never completed into a query."""
+        pending, self._pending = self._pending, ""
+        return pending

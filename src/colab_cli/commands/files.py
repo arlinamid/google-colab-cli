@@ -15,12 +15,15 @@
 import click
 import hashlib
 import os
+import shutil
+import subprocess
 import tempfile
 import typer
 from typing import Optional
 from typing_extensions import Annotated
 
 from colab_cli.contents import ContentsClient
+from colab_cli.terminal import is_windows, split_windows_command_line
 
 
 def ls(
@@ -132,6 +135,36 @@ def download(
         raise typer.Exit(1)
 
 
+def _launch_editor(path: str) -> None:
+    """Open ``path`` in the user's editor and wait for it to exit.
+
+    click.edit splits ``$VISUAL``/``$EDITOR`` with POSIX ``shlex`` on every
+    platform, which drops the backslashes of an unquoted Windows path such as
+    ``C:\\tools\\edit.exe`` (pallets/click#3840). On Windows, when one of
+    those variables is set, split it with the Windows rules and start the
+    editor here. Everything else, including click's own default editor,
+    still goes through click.edit.
+    """
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not (is_windows() and editor):
+        click.edit(filename=path)
+        return
+
+    argv = split_windows_command_line(editor)
+    if not argv:
+        click.edit(filename=path)
+        return
+    # CreateProcess only appends .exe; which() also finds .cmd/.bat
+    # launchers such as VS Code's `code`.
+    argv[0] = shutil.which(argv[0]) or argv[0]
+    try:
+        returncode = subprocess.call(argv + [path])
+    except OSError as e:
+        raise click.ClickException(f"{editor}: Editing failed: {e}") from e
+    if returncode != 0:
+        raise click.ClickException(f"{editor}: Editing failed")
+
+
 def edit(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -171,7 +204,7 @@ def edit(
 
         hash_before = get_file_hash(local_path)
 
-        click.edit(filename=local_path)
+        _launch_editor(local_path)
 
         hash_after = get_file_hash(local_path)
 

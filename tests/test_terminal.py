@@ -19,17 +19,90 @@ Windows PowerShell / cmd.exe behavior.
 """
 
 import subprocess
+import sys
 
 import pytest
 
 from colab_cli.terminal import (
+    TerminalQueryFilter,
     enable_windows_virtual_terminal,
     join_argv,
     open_url_in_browser,
     read_controlling_line,
+    split_windows_command_line,
     translate_windows_key,
     windows_raw_console,
 )
+
+
+# --- terminal query filter (piped `colab console`) ---------------------------
+
+# The queries tmux on the runtime sent when a piped console attached.
+TMUX_QUERIES = ["\x1b[c", "\x1b[>c", "\x1b[>q", "\x1b]10;?\x1b\\", "\x1b]11;?\x1b\\"]
+
+
+@pytest.mark.parametrize(
+    "query", TMUX_QUERIES + ["\x1b[0c", "\x1b[=c", "\x1b[6n", "\x1b]4;1;?\x07"]
+)
+def test_query_filter_drops_terminal_queries(query):
+    f = TerminalQueryFilter()
+    assert f.feed(f"before{query}after") == "beforeafter"
+    assert f.flush() == ""
+
+
+@pytest.mark.parametrize(
+    "keep",
+    [
+        "\x1b[0m",
+        "\x1b[1;31m",
+        "\x1b[?1049h",
+        "\x1b[2J\x1b[H",
+        "\x1b]0;window title\x07",
+        "\x1b[?61;6;7c",  # a DA1 *reply* is not a query
+    ],
+)
+def test_query_filter_keeps_other_sequences(keep):
+    f = TerminalQueryFilter()
+    assert f.feed(f"a{keep}b") + f.flush() == f"a{keep}b"
+
+
+def test_query_filter_handles_queries_split_across_chunks():
+    f = TerminalQueryFilter()
+    stream = "hello" + "".join(TMUX_QUERIES) + "\x1b[0mworld"
+    out = "".join(f.feed(stream[i : i + 3]) for i in range(0, len(stream), 3))
+    out += f.flush()
+    assert out == "hello\x1b[0mworld"
+
+
+def test_query_filter_flushes_incomplete_tail():
+    f = TerminalQueryFilter()
+    assert f.feed("done\x1b[") == "done"
+    assert f.flush() == "\x1b["
+
+
+# --- Windows command-line splitting (EDITOR) ---------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="uses CommandLineToArgvW")
+@pytest.mark.parametrize(
+    "cmd, argv",
+    [
+        ("python D:\\x\\editor.py", ["python", "D:\\x\\editor.py"]),
+        (
+            '"C:\\Program Files\\My Editor\\edit.exe" --wait',
+            ["C:\\Program Files\\My Editor\\edit.exe", "--wait"],
+        ),
+        ("notepad", ["notepad"]),
+    ],
+)
+def test_split_windows_command_line_keeps_backslashes(cmd, argv):
+    assert split_windows_command_line(cmd) == argv
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="uses CommandLineToArgvW")
+def test_split_windows_command_line_inverts_list2cmdline():
+    argv = ["C:\\a b\\x.exe", "say \"hi\"", "a&b", "trailing\\"]
+    assert split_windows_command_line(subprocess.list2cmdline(argv)) == argv
 
 
 @pytest.mark.parametrize(

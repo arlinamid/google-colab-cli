@@ -277,6 +277,53 @@ def test_read_stdin_windows_tty_sends_translated_keys(
     mock_ws.close.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "stdin_is_tty, expected",
+    [
+        # Piped: the terminal's answers can never reach the remote side, so
+        # the queries are dropped (and a cut-off tail is flushed at the end).
+        (False, ["x", "y", "\x1b["]),
+        # Interactive: answers flow back through stdin, so pass queries on.
+        (True, ["x\x1b[>c", "y\x1b["]),
+    ],
+    ids=["piped", "tty"],
+)
+@patch("colab_cli.console.websocket.WebSocketApp")
+@patch("colab_cli.console.sys.stdin.isatty")
+def test_console_drops_terminal_queries_only_when_piped(
+    mock_isatty, mock_ws_app, mock_session, stdin_is_tty, expected
+):
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = stdin_is_tty
+    ws = MagicMock()
+    mock_ws_app.return_value = ws
+
+    def remote_output():
+        console_mod.on_message(ws, json.dumps({"data": "x\x1b[>c"}))
+        console_mod.on_message(ws, json.dumps({"data": "y\x1b["}))
+
+    ws.run_forever.side_effect = remote_output
+    written = []
+
+    with (
+        patch.object(console_mod, "termios", None),
+        patch.object(console_mod, "tty", None),
+        patch.object(console_mod, "is_windows", return_value=False),
+        patch("colab_cli.console.threading.Thread"),
+        patch(
+            "colab_cli.console.sys.stdout.buffer.write",
+            side_effect=lambda b: written.append(b.decode("utf-8")),
+        ),
+        patch("colab_cli.console.sys.stdout.buffer.flush"),
+    ):
+        connect_console(mock_session)
+
+    # connect_console prints its own "Connection closed." afterwards.
+    remote = [w for w in written if w][: len(expected)]
+    assert remote == expected
+
+
 @patch("colab_cli.console.websocket.WebSocketApp")
 @patch("colab_cli.console.sys.stdin.isatty")
 def test_console_no_termios_degrades_gracefully(mock_isatty, mock_ws_app, mock_session):
