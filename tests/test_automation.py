@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 from colab_cli.cli import app
@@ -96,7 +96,11 @@ def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
     mock_runtime.execute_code.assert_called_once()
     called_code = mock_runtime.execute_code.call_args[0][0]
 
-    assert "drive.mount('/foo/bar')" in called_code
+    assert "drive.mount('/foo/bar'" in called_code
+    assert "timeout_ms=" in called_code
+    # The kernel-side default is 120s and that budget includes the browser
+    # consent wait. Anything under 5 minutes will still abort a normal mount.
+    assert "timeout_ms=120000" not in called_code
     assert mock_runtime.colab_request_hook is not None
     # Drivemount waits for the user to OAuth in their browser; the kernel
     # goes silent during that wait and the default 10s execute() timeout
@@ -104,6 +108,53 @@ def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
     # (>= 5 minutes) being forwarded to runtime.execute_code.
     _, kwargs = mock_runtime.execute_code.call_args
     assert kwargs.get("timeout") is not None and kwargs["timeout"] >= 300
+
+
+@patch("colab_cli.commands.automation.perform_drive_authorization")
+@patch("colab_cli.auth.get_credentials")
+@patch("colab_cli.commands.automation.ColabRuntime")
+@patch("colab_cli.common.state")
+def test_drivemount_hook_runs_off_the_websocket_thread(
+    mock_state, mock_runtime_class, _mock_creds, mock_perform, mock_session
+):
+    """The dfs_ephemeral handler must return without doing the browser prompt
+    on the caller (the websocket recv thread)."""
+    mock_state.get_session.return_value = mock_session
+    mock_state.resolve_session.return_value = "test-session"
+    mock_state.client.colab_domain = "https://colab.research.google.com"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = [{"text": "Mounted"}]
+
+    result = runner.invoke(app, ["drivemount", "-s", "test-session", "--authuser", "6"])
+    assert result.exit_code == 0
+
+    hook = mock_runtime.colab_request_hook
+    msg = {
+        "content": {"request": {"authType": "dfs_ephemeral"}},
+        "metadata": {"colab_msg_id": 3},
+        "header": {"msg_id": "parent"},
+    }
+
+    class SyncThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    with patch("colab_cli.commands.automation.threading.Thread", SyncThread):
+        assert hook(msg, MagicMock()) is True
+    assert mock_perform.call_args.kwargs["authuser"] == "6"
+    assert mock_perform.call_args.kwargs["rewrite_auth_url"] is True
+
+    other = {"content": {"request": {"authType": "something_else"}}}
+    assert hook(other, MagicMock()) is False
+
+
+def test_drivemount_help_documents_authuser():
+    result = runner.invoke(app, ["drivemount", "--help"])
+    assert result.exit_code == 0
+    assert "--authuser" in result.output
 
 
 @patch("colab_cli.commands.automation.ColabRuntime")

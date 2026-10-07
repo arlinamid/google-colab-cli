@@ -7,7 +7,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
-> **Platform support:** the Colab CLI currently supports **Linux and macOS** only. Windows is not supported at this time.
+> **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). Interactive `colab console` uses the Windows console API on Windows (raw keystrokes and ANSI color). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.
 
 > [!TIP]
 > Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
@@ -97,7 +97,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | Command | Description |
 | --- | --- |
 | `colab auth [-s NAME]` | Authenticate the VM for GCP services (BigQuery, GCS, etc.) |
-| `colab drivemount [-s NAME] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
+| `colab drivemount [-s NAME] [--authuser N] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
 | `colab install [-s NAME] [-r FILE \| PKG...]` | Install packages on the VM using `uv` (falls back to `pip`) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
 | `colab usage` | Show account compute-unit usage rate and balance |
@@ -144,7 +144,8 @@ colab stop -s analysis
 ## Usage Notes
 
 * **Machine shape:** Use `--high-mem` with `colab new`, `colab run`, or `colab ssh` (when auto-creating a runtime) to request a high-RAM machine shape. Requires Colab Pro or Pro+ entitlement for supported accelerators (CPU, T4, A100, etc.). L4 and TPU runtimes ignore this flag because they only offer one shape. Machine shape is shown in `colab sessions` and `colab status`.
-* **TTY Requirements:** The interactive commands `repl` and `console` require a local TTY. When running inside automated scripts or pipelines, make sure to pipe stdin (e.g., `echo "print(1)" | colab repl`) to trigger non-interactive execution modes.
+* **TTY Requirements:** The interactive commands `repl` and `console` require a local TTY. When running inside automated scripts or pipelines, make sure to pipe stdin (e.g., `echo "print(1)" | colab repl`) to trigger non-interactive execution modes. On Windows, `colab console` switches the console out of line-editing mode so arrow keys and Ctrl-C reach the remote shell; colors need virtual-terminal processing, which the CLI turns on for cmd.exe and Windows PowerShell.
+* **Drive mount and multiple Google accounts:** `colab drivemount` prints a consent URL (and opens it in the browser when it can) and waits up to 10 minutes. On the account chooser, select the same account the CLI authenticated as (`colab whoami` / the `login_hint` in the URL). A browser that is signed into several accounts otherwise attributes the Drive session to the active account, and Colab rejects the mount with HTTP 400. `--authuser N` appends that index to the consent URL when the chooser keeps opening the wrong account.
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
 * **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 

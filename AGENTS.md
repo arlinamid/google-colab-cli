@@ -87,7 +87,7 @@ As an AI agent operating via non-interactive shell tools (`run_shell_command`), 
   - Specially crafted mock scripts that simulate timeouts or API calls.
 - **I CANNOT Run (Requires User Assistance):**
   - **`colab auth`**: This command relies on the traditional Gcloud fallback `input_request` (via `USE_AUTH_EPHEM='0'`), which prompts the user via Python's `input()` to click a URL, sign in, and paste back an authorization code. My shell tool will hang indefinitely on this `input()`.
-  - **`colab drivemount`**: This command prompts the user via `sys.stdin.readline()` (specifically querying `/dev/tty` to ensure input is captured) to press `Enter` after granting OAuth consent in the browser. My shell tool will timeout/hang waiting for `Enter`.
+  - **`colab drivemount`**: This command prompts the user to press `Enter` after granting OAuth consent in the browser. The prompt reads the controlling terminal (`/dev/tty` on POSIX, `CONIN$` on Windows), falling back to stdin. My shell tool will timeout/hang waiting for `Enter`. The consent URL is also opened in a GUI browser when one is available.
   - **Interactive (TTY) `colab repl` / `colab console`**: When stdin is a real terminal these commands drop into interactive raw-TTY modes that require real-time keystroke streaming. My shell tools cannot support this. (Piped stdin is fine — see above.)
 
 Whenever working on interactive commands, I must build the core logic, write mock tests, and explicitly ask the user to run the live test in their terminal to verify success.

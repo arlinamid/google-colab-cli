@@ -235,9 +235,7 @@ def test_read_stdin_eof_tty_does_not_close_ws(
 
 @patch("colab_cli.console.websocket.WebSocketApp")
 @patch("colab_cli.console.sys.stdin.isatty")
-def test_console_no_termios_degrades_gracefully(
-    mock_isatty, mock_ws_app, mock_session
-):
+def test_console_no_termios_degrades_gracefully(mock_isatty, mock_ws_app, mock_session):
     """Windows has no termios/tty/SIGWINCH. connect_console must not crash.
 
     Regression test for `ModuleNotFoundError: No module named 'termios'`
@@ -259,3 +257,78 @@ def test_console_no_termios_degrades_gracefully(
         connect_console(mock_session)
 
     mock_ws_instance.run_forever.assert_called_once()
+
+
+@patch("colab_cli.console.websocket.WebSocketApp")
+@patch("colab_cli.console.sys.stdin.isatty")
+def test_console_windows_uses_raw_console_not_termios(
+    mock_isatty, mock_ws_app, mock_session
+):
+    """cmd.exe and PowerShell have no termios. Interactive console must switch
+    the Windows console into raw mode instead of staying line-buffered.
+    """
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = True
+    mock_ws_instance = MagicMock()
+    mock_ws_app.return_value = mock_ws_instance
+    mock_ws_instance.run_forever.return_value = None
+    raw_cm = MagicMock()
+
+    with (
+        patch.object(console_mod, "termios", None),
+        patch.object(console_mod, "tty", None),
+        patch.object(console_mod, "is_windows", return_value=True),
+        patch.object(
+            console_mod, "windows_raw_console", return_value=raw_cm
+        ) as mock_raw,
+        patch("colab_cli.console.threading.Thread"),
+    ):
+        connect_console(mock_session)
+
+    mock_raw.assert_called_once()
+    raw_cm.__enter__.assert_called_once()
+    raw_cm.__exit__.assert_called_once()
+    mock_ws_instance.run_forever.assert_called_once()
+
+
+@patch("colab_cli.console.os.get_terminal_size")
+@patch("colab_cli.console.sys.stdin.isatty")
+def test_read_stdin_windows_tty_forwards_translated_keys(
+    mock_isatty, mock_get_term_size
+):
+    """Arrow keys arrive as Windows scan codes. The remote shell needs the
+    ANSI sequence, one character per websocket frame, matching POSIX raw mode.
+    """
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = True
+    mock_get_term_size.return_value = os.terminal_size((80, 24))
+    keys = ["\x1b[A", "\r"]
+
+    def fake_key():
+        if not keys:
+            console_mod._is_running = False
+            return ""
+        return keys.pop(0)
+
+    mock_ws = MagicMock()
+
+    class SyncThread:
+        def __init__(self, target, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    console_mod._is_running = True
+    with (
+        patch.object(console_mod, "is_windows", return_value=True),
+        patch.object(console_mod, "read_windows_key", side_effect=fake_key),
+        patch("colab_cli.console.threading.Thread", SyncThread),
+    ):
+        on_open(mock_ws)
+
+    sent = [json.loads(call.args[0]) for call in mock_ws.send.call_args_list]
+    assert sent[0] == {"cols": 80, "rows": 24}
+    assert [item["data"] for item in sent[1:]] == ["\x1b", "[", "A", "\r"]

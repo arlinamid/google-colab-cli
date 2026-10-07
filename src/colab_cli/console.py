@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import json
 import logging
 import os
@@ -33,6 +34,12 @@ from urllib.parse import urlparse
 import websocket
 
 from colab_cli.state import SessionState
+from colab_cli.terminal import (
+    enable_windows_virtual_terminal,
+    is_windows,
+    read_windows_key,
+    windows_raw_console,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,30 +103,44 @@ def on_open(ws):
     # Setup the background thread to read from stdin
     def read_stdin():
         is_tty = sys.stdin.isatty()
+        # Windows consoles are line-buffered unless we switched to raw mode
+        # in connect_console(). Read keystrokes through the console API and
+        # translate scan codes to ANSI so cmd.exe and PowerShell behave like
+        # a POSIX raw tty. Piped stdin stays on sys.stdin.read so EOF still
+        # works.
+        windows_tty = is_windows() and is_tty
         while _is_running:
             try:
-                # Read a single character (or escape sequence byte)
-                char = sys.stdin.read(1)
-                if not char:
-                    if not is_tty:
-                        # Piped input has reached EOF. The remote /colab/tty
-                        # endpoint wraps bash in tmux which intercepts \x04
-                        # (Ctrl-D) as a literal character, so it never exits.
-                        # Instead send "exit\n" so bash voluntarily terminates,
-                        # wait a short grace period for the shell's goodbye
-                        # output to drain back to us, then close the websocket
-                        # ourselves to guarantee the client unblocks.
-                        try:
-                            ws.send(json.dumps({"data": "exit\n"}))
-                        except Exception:
-                            pass
-                        time.sleep(PIPED_EOF_GRACE_SECONDS)
-                        try:
-                            ws.close()
-                        except Exception:
-                            pass
-                    break
-                ws.send(json.dumps({"data": char}))
+                if windows_tty:
+                    text = read_windows_key()
+                    if not text:
+                        continue
+                    chunks = list(text)
+                else:
+                    # Read a single character (or escape sequence byte)
+                    char = sys.stdin.read(1)
+                    if not char:
+                        if not is_tty:
+                            # Piped input has reached EOF. The remote /colab/tty
+                            # endpoint wraps bash in tmux which intercepts \x04
+                            # (Ctrl-D) as a literal character, so it never exits.
+                            # Instead send "exit\n" so bash voluntarily terminates,
+                            # wait a short grace period for the shell's goodbye
+                            # output to drain back to us, then close the websocket
+                            # ourselves to guarantee the client unblocks.
+                            try:
+                                ws.send(json.dumps({"data": "exit\n"}))
+                            except Exception:
+                                pass
+                            time.sleep(PIPED_EOF_GRACE_SECONDS)
+                            try:
+                                ws.close()
+                            except Exception:
+                                pass
+                        break
+                    chunks = [char]
+                for chunk in chunks:
+                    ws.send(json.dumps({"data": chunk}))
             except Exception:
                 break
 
@@ -133,6 +154,10 @@ def connect_console(session: SessionState):
     """
     global _is_running, _last_error
     _last_error = None
+    # cmd.exe and Windows PowerShell 5.1 do not enable ANSI processing by
+    # default. The remote PTY speaks ANSI, and we write those bytes straight
+    # to stdout.buffer, so the console mode has to be switched first.
+    enable_windows_virtual_terminal()
 
     # Construct the WebSocket URL from the base URL
     parsed = urlparse(session.url)
@@ -143,6 +168,9 @@ def connect_console(session: SessionState):
     fd = None
     old_settings = None
     can_raw = termios is not None and tty is not None and is_tty
+    # Windows has no termios. Raw mode is the console API instead, so
+    # interactive `colab console` is not stuck in cooked line editing.
+    use_windows_raw = is_windows() and is_tty and not can_raw
     if can_raw:
         try:
             fd = sys.stdin.fileno()
@@ -166,22 +194,43 @@ def connect_console(session: SessionState):
             send_terminal_size(ws)
 
     sigwinch = getattr(signal, "SIGWINCH", None)
+    resize_stop = threading.Event()
+
+    def _watch_resize():
+        """Poll the console size. Windows has no SIGWINCH."""
+        last = None
+        while not resize_stop.is_set():
+            try:
+                size = os.get_terminal_size()
+                current = (size.columns, size.lines)
+                if current != last:
+                    last = current
+                    send_terminal_size(ws)
+            except Exception:
+                pass
+            resize_stop.wait(0.4)
+
+    raw_cm = windows_raw_console() if use_windows_raw else contextlib.nullcontext()
     try:
-        if can_raw:
-            tty.setraw(fd, termios.TCSANOW)
-            if sigwinch is not None:
-                signal.signal(sigwinch, handle_sigwinch)
+        with raw_cm:
+            if use_windows_raw:
+                threading.Thread(target=_watch_resize, daemon=True).start()
+            if can_raw:
+                tty.setraw(fd, termios.TCSANOW)
+                if sigwinch is not None:
+                    signal.signal(sigwinch, handle_sigwinch)
 
-        # This is a blocking call until the connection is closed
-        ws.run_forever()
+            # This is a blocking call until the connection is closed
+            ws.run_forever()
 
-        if _last_error:
-            # Re-raise or wrap terminal errors
-            err_msg = str(_last_error)
-            if "404" in err_msg or "401" in err_msg:
-                # We raise a standard exception that the caller can recognize
-                raise RuntimeError(f"Connection failed: {err_msg}")
+            if _last_error:
+                # Re-raise or wrap terminal errors
+                err_msg = str(_last_error)
+                if "404" in err_msg or "401" in err_msg:
+                    # We raise a standard exception that the caller can recognize
+                    raise RuntimeError(f"Connection failed: {err_msg}")
     finally:
+        resize_stop.set()
         if can_raw:
             # Always ensure the terminal is restored to its original state
             try:
