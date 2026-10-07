@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -566,6 +567,77 @@ def test_cli_edit_with_changes(
     mock_contents_class.return_value.download.assert_called_once()
     mock_contents_class.return_value.upload.assert_called_once()
     assert "Edited and uploaded 'remote.txt'" in result.output
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+@patch("click.edit")
+def test_cli_edit_round_trips_downloaded_content(
+    mock_edit, mock_contents_class, mock_store, mock_common_state
+):
+    """The download, the editor and the upload must all be able to open the
+    local file. With an open NamedTemporaryFile this fails on Windows, and the
+    swallowed download error left the editor with an empty file."""
+    mock_common_state.resolve_session.return_value = "s1"
+    contents = mock_contents_class.return_value
+
+    def fake_download(remote, local):
+        with open(local, "w") as f:
+            f.write("remote content\n")
+
+    contents.download.side_effect = fake_download
+
+    seen = {}
+
+    def fake_editor(filename, **kwargs):
+        seen["path"] = filename
+        with open(filename) as f:
+            seen["content"] = f.read()
+        with open(filename, "a") as f:
+            f.write("edited\n")
+
+    mock_edit.side_effect = fake_editor
+
+    uploaded = {}
+
+    def fake_upload(local, remote):
+        with open(local) as f:
+            uploaded[remote] = f.read()
+
+    contents.upload.side_effect = fake_upload
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "/content/dir/remote.py"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["content"] == "remote content\n"
+    assert os.path.basename(seen["path"]) == "remote.py"
+    assert uploaded == {"/content/dir/remote.py": "remote content\nedited\n"}
+    assert not os.path.exists(seen["path"])
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+@patch("click.edit")
+def test_cli_edit_missing_remote_file_starts_empty(
+    mock_edit, mock_contents_class, mock_store, mock_common_state
+):
+    mock_common_state.resolve_session.return_value = "s1"
+    contents = mock_contents_class.return_value
+    contents.download.side_effect = Exception("404")
+
+    seen = {}
+
+    def fake_editor(filename, **kwargs):
+        seen["exists"] = os.path.exists(filename)
+        with open(filename, "a") as f:
+            f.write("brand new\n")
+
+    mock_edit.side_effect = fake_editor
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "new.txt"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["exists"] is True
+    contents.upload.assert_called_once()
+    assert "Edited and uploaded 'new.txt'" in result.output
 
 
 def _make_400_error(message="Bad Request"):
