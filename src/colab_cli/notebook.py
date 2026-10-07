@@ -83,7 +83,10 @@ def select_cells(cells: List[CodeCell], spec: Optional[str]) -> List[CodeCell]:
 
     ``spec`` is a comma-separated list of code-cell numbers (``3``), ranges
     (``2-5``), ``#@title`` values or cell ids. Numbers count code cells only,
-    from 1, so markdown cells do not shift them. ``None`` selects every cell.
+    from 1, so markdown cells do not shift them. An entry that looks like a
+    number or a range is always read as one, even if a title or cell id reads
+    the same (nbformat's random ids are sometimes all digits); select such a
+    cell by its number. ``None`` selects every cell.
     """
     if spec is None:
         return list(cells)

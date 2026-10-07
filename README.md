@@ -143,7 +143,7 @@ colab stop -s analysis
 
 `colab exec` runs every code cell top to bottom by default. A cell that raises an error does not stop the run, but the command exits with code 1 and lists the failed cells. You can change this with the following options:
 
-* `--cells SPEC`: run only some cells, in the order given. `SPEC` is a comma-separated list of code-cell numbers (counted from 1, without markdown cells), ranges such as `2-5`, `#@title` values or cell ids.
+* `--cells SPEC`: run only some cells, in the order given. `SPEC` is a comma-separated list of code-cell numbers (counted from 1, without markdown cells), ranges such as `2-5`, `#@title` values or cell ids. An entry that looks like a number or range is always read as one, so select a cell whose title or id is numeric by its number.
 * `--stop-on-error`: stop at the first failing cell.
 * `--check`: check the selected cells locally before anything runs: the notebook structure, `--cells`, and Python syntax (IPython `!cmd`, `%magic`, `x = !cmd` and top-level `await` are accepted; `%%` cell magics are skipped). If a check fails, nothing runs.
 * `--check-only`: run the same checks and print which cells would run, without a session.

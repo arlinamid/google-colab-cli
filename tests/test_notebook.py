@@ -74,7 +74,19 @@ def test_select_cells(cells, spec, numbers):
 
 
 def test_select_by_cell_id(cells):
-    assert select_cells(cells, cells[2].id) == [cells[2]]
+    # A fixed id: nbformat's random 8-hex-digit ids are occasionally all
+    # digits, and those select by number (see the next test).
+    cells[2].id = "data-load"
+    assert select_cells(cells, "data-load") == [cells[2]]
+
+
+def test_numbers_and_ranges_win_over_look_alike_ids(cells):
+    """An entry that looks like a number or a range is one, even if a cell id
+    happens to read the same; such cells are selected by number instead."""
+    cells[0].id = "3"
+    cells[1].id = "1-2"
+    assert [c.number for c in select_cells(cells, "3")] == [3]
+    assert [c.number for c in select_cells(cells, "1-2")] == [1, 2]
 
 
 @pytest.mark.parametrize(

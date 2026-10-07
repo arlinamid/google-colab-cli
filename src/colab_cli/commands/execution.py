@@ -242,7 +242,9 @@ def exec_command(
             help=(
                 "Notebooks only: run just these code cells, in this order. "
                 "Comma-separated code-cell numbers (from 1, markdown cells not "
-                "counted), ranges such as 2-5, #@title values or cell ids."
+                "counted), ranges such as 2-5, #@title values or cell ids. "
+                "Entries that look like numbers or ranges are always read as "
+                "such."
             ),
         ),
     ] = None,
