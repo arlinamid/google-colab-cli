@@ -79,7 +79,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | Command | Description |
 | --- | --- |
 | `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
-| `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
+| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--cells SPEC] [--stop-on-error] [--check \| --check-only]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
@@ -137,6 +137,20 @@ colab drivemount -s analysis
 colab exec -s analysis -f report.ipynb
 colab log -s analysis -o execution_log.md
 colab stop -s analysis
+```
+
+### Choosing Notebook Cells, and Checking Before Running
+
+`colab exec` runs every code cell top to bottom by default. A cell that raises an error does not stop the run, but the command exits with code 1 and lists the failed cells. You can change this with the following options:
+
+* `--cells SPEC`: run only some cells, in the order given. `SPEC` is a comma-separated list of code-cell numbers (counted from 1, without markdown cells), ranges such as `2-5`, `#@title` values or cell ids.
+* `--stop-on-error`: stop at the first failing cell.
+* `--check`: check the selected cells locally before anything runs: the notebook structure, `--cells`, and Python syntax (IPython `!cmd`, `%magic`, `x = !cmd` and top-level `await` are accepted; `%%` cell magics are skipped). If a check fails, nothing runs.
+* `--check-only`: run the same checks and print which cells would run, without a session.
+
+```bash
+colab exec -f report.ipynb --check-only --cells "Setup,4-6"
+colab exec -s analysis -f report.ipynb --check --cells "Setup,4-6" --stop-on-error
 ```
 
 ---
