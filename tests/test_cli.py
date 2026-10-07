@@ -398,9 +398,13 @@ def _extract_command_names(help_output: str) -> list[str]:
                 break
             # Lines look like:  "│ help        Show help for a command. │"
             # Strip the rich box characters.
-            inner = stripped.strip("│").strip()
-            if not inner:
+            inner = stripped.strip("│")
+            # A wrapped description continues on a line whose command column
+            # is blank. Rich renders one column narrower on Windows, so this
+            # happens there at the default width.
+            if not inner.strip() or not inner[:2].strip():
                 continue
+            inner = inner.strip()
             tok = inner.split()[0]
             names.append(tok)
     return names
