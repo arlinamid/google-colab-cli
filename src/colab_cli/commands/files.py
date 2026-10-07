@@ -152,16 +152,22 @@ def edit(
         with open(path, "rb") as f:
             return hashlib.file_digest(f, "sha256").hexdigest()
 
-    _, ext = os.path.splitext(remote_path)
-
-    with tempfile.NamedTemporaryFile(suffix=ext) as tf:
-        local_path = tf.name
+    # A path inside a temporary directory, not NamedTemporaryFile: on Windows
+    # an open NamedTemporaryFile cannot be opened a second time, so the
+    # download, the hash and the editor would all fail with PermissionError.
+    # Keeping the remote basename also gives the editor the right extension.
+    with tempfile.TemporaryDirectory(prefix="colab-edit-") as tmpdir:
+        local_path = os.path.join(
+            tmpdir, os.path.basename(remote_path.rstrip("/")) or "file"
+        )
 
         try:
             contents.download(remote_path, local_path)
         except Exception:
             # If download fails, assume file doesn't exist and start empty
             pass
+        if not os.path.exists(local_path):
+            open(local_path, "wb").close()
 
         hash_before = get_file_hash(local_path)
 
