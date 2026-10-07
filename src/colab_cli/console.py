@@ -29,12 +29,14 @@ except ImportError:
     # gracefully to line-buffered input when these are unavailable.
     termios = None  # type: ignore
     tty = None  # type: ignore
+from typing import Optional
 from urllib.parse import urlparse
 
 import websocket
 
 from colab_cli.state import SessionState
 from colab_cli.terminal import (
+    TerminalQueryFilter,
     enable_windows_virtual_terminal,
     is_windows,
     read_windows_key,
@@ -46,6 +48,9 @@ logger = logging.getLogger(__name__)
 # Global flag to stop the read thread when the websocket closes
 _is_running = False
 _last_error = None
+# Set when stdin is piped: drops terminal queries from the remote output,
+# because the local terminal's answers could never reach the remote side.
+_output_filter: Optional[TerminalQueryFilter] = None
 
 # When stdin is piped and reaches EOF, we send "exit\n" to the remote shell and
 # then wait this many seconds for any remaining output (the shell's goodbye,
@@ -63,7 +68,10 @@ def on_message(ws, message):
         if "data" in data:
             # The backend sends raw ANSI escape sequences and string content.
             # We write it directly to stdout buffer to avoid python print() formatting.
-            sys.stdout.buffer.write(data["data"].encode("utf-8"))
+            text = data["data"]
+            if _output_filter is not None:
+                text = _output_filter.feed(text)
+            sys.stdout.buffer.write(text.encode("utf-8"))
             sys.stdout.buffer.flush()
     except Exception as e:
         logger.debug(f"Error parsing message: {e}")
@@ -152,7 +160,7 @@ def connect_console(session: SessionState):
     """
     Connects to the Colab TTY endpoint and sets up a raw terminal session.
     """
-    global _is_running, _last_error
+    global _is_running, _last_error, _output_filter
     _last_error = None
     # cmd.exe and Windows PowerShell 5.1 do not enable ANSI processing by
     # default. The remote PTY speaks ANSI, and we write those bytes straight
@@ -165,6 +173,7 @@ def connect_console(session: SessionState):
     ws_url = f"{ws_scheme}://{parsed.netloc}/colab/tty?colab-runtime-proxy-token={session.token}"
 
     is_tty = sys.stdin.isatty()
+    _output_filter = None if is_tty else TerminalQueryFilter()
     fd = None
     old_settings = None
     can_raw = termios is not None and tty is not None and is_tty
@@ -222,6 +231,12 @@ def connect_console(session: SessionState):
 
             # This is a blocking call until the connection is closed
             ws.run_forever()
+
+            if _output_filter is not None:
+                tail = _output_filter.flush()
+                if tail:
+                    sys.stdout.buffer.write(tail.encode("utf-8"))
+                    sys.stdout.buffer.flush()
 
             if _last_error:
                 # Re-raise or wrap terminal errors

@@ -48,6 +48,14 @@ def mock_history(mock_common_state):
     return mock_common_state.history
 
 
+@pytest.fixture(autouse=True)
+def _no_user_editor(monkeypatch):
+    """`colab edit` honors $VISUAL/$EDITOR directly on Windows. Keep the
+    developer's own editor setting from launching a real editor in tests."""
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+
+
 def test_cli_new_tpu(mock_client, mock_store):
     mock_res = MagicMock()
     mock_res.__class__ = PostAssignmentResponse
@@ -642,6 +650,63 @@ def test_cli_edit_missing_remote_file_starts_empty(
     assert seen["exists"] is True
     contents.upload.assert_called_once()
     assert "Edited and uploaded 'new.txt'" in result.output
+
+
+def test_launch_editor_windows_keeps_backslashes(mocker, monkeypatch):
+    """On Windows $EDITOR is split with the Windows rules and started
+    directly, so a backslash path survives (pallets/click#3840)."""
+    from colab_cli.commands import files
+
+    monkeypatch.setenv("EDITOR", r"C:\tools\edit.exe --wait")
+    mocker.patch.object(files, "is_windows", return_value=True)
+    mocker.patch.object(
+        files,
+        "split_windows_command_line",
+        return_value=[r"C:\tools\edit.exe", "--wait"],
+    )
+    mocker.patch.object(files.shutil, "which", return_value=None)
+    call = mocker.patch.object(files.subprocess, "call", return_value=0)
+    click_edit = mocker.patch("click.edit")
+
+    files._launch_editor(r"C:\tmp\colab-edit-x\a.py")
+
+    call.assert_called_once_with(
+        [r"C:\tools\edit.exe", "--wait", r"C:\tmp\colab-edit-x\a.py"]
+    )
+    click_edit.assert_not_called()
+
+
+def test_launch_editor_windows_nonzero_exit_fails(mocker, monkeypatch):
+    import click
+    from colab_cli.commands import files
+
+    monkeypatch.setenv("VISUAL", "ed")
+    mocker.patch.object(files, "is_windows", return_value=True)
+    mocker.patch.object(files, "split_windows_command_line", return_value=["ed"])
+    mocker.patch.object(files.shutil, "which", return_value=r"C:\bin\ed.cmd")
+    call = mocker.patch.object(files.subprocess, "call", return_value=3)
+
+    with pytest.raises(click.ClickException):
+        files._launch_editor("f.txt")
+    call.assert_called_once_with([r"C:\bin\ed.cmd", "f.txt"])
+
+
+@pytest.mark.parametrize("windows, editor", [(False, "vim"), (True, None)])
+def test_launch_editor_otherwise_uses_click(mocker, monkeypatch, windows, editor):
+    """POSIX, and Windows without $VISUAL/$EDITOR (click's own default),
+    keep going through click.edit."""
+    from colab_cli.commands import files
+
+    if editor:
+        monkeypatch.setenv("EDITOR", editor)
+    mocker.patch.object(files, "is_windows", return_value=windows)
+    call = mocker.patch.object(files.subprocess, "call")
+    click_edit = mocker.patch("click.edit")
+
+    files._launch_editor("f.txt")
+
+    click_edit.assert_called_once_with(filename="f.txt")
+    call.assert_not_called()
 
 
 def _make_400_error(message="Bad Request"):
