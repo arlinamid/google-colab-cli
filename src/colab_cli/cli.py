@@ -164,8 +164,30 @@ utility.register(app)
 usage.register(app)
 
 
+def _connection_lost_message(name: Optional[str]) -> str:
+    """Explain a dropped kernel connection in one line, not a traceback."""
+    from colab_cli.common import state
+
+    try:
+        still_recorded = name is not None and state.store.get(name) is not None
+    except Exception:
+        still_recorded = True
+    if not still_recorded:
+        return f"[colab] Session '{name}' was stopped, so the running command ended."
+    return (
+        f"[colab] Lost the connection to session '{name}'. The runtime may have "
+        f"been stopped or disconnected; check it with `colab status -s {name}`."
+    )
+
+
 def main():
-    app()
+    from colab_cli.runtime import SessionConnectionLost
+
+    try:
+        app()
+    except SessionConnectionLost as e:
+        typer.echo(_connection_lost_message(e.session_name), err=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

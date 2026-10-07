@@ -138,6 +138,22 @@ class StateStore(_LockedFileStore):
             sessions[state.name] = state
             self._save_raw(f, sessions)
 
+    def update_if_present(self, state: SessionState) -> bool:
+        """Write ``state`` back only if its session is still recorded.
+
+        Long-running commands save the session again when they finish (to
+        clear ``running``). If ``colab stop`` removed the session meanwhile, a
+        plain ``add`` would resurrect a stopped session in sessions.json.
+        Returns True when the session was updated.
+        """
+        with self._lock_exclusive() as f:
+            sessions = self._load_raw(f)
+            if state.name not in sessions:
+                return False
+            sessions[state.name] = state
+            self._save_raw(f, sessions)
+            return True
+
     def get(self, name: str) -> Optional[SessionState]:
         with self._lock_shared() as f:
             if f is None:

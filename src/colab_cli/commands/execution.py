@@ -207,6 +207,7 @@ def exec_command(
     runtime = ColabRuntime(
         s.url,
         s.token,
+        session_name=s.name,
         kernel_id=s.kernel_id,
         session_id=s.session_id,
         on_kernel_started=on_started,
@@ -274,7 +275,7 @@ def exec_command(
             )
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
         runtime.stop()
         if file and file.endswith(".ipynb"):
             output_file = os.path.splitext(file)[0] + "_output.ipynb"
@@ -308,6 +309,7 @@ def repl(
     runtime = ColabRuntime(
         s.url,
         s.token,
+        session_name=s.name,
         kernel_id=s.kernel_id,
         session_id=s.session_id,
         on_kernel_started=on_started,
@@ -348,7 +350,7 @@ def repl(
             )
         finally:
             s.running = None
-            state.store.add(s)
+            state.store.update_if_present(s)
             runtime.stop()
     else:
         from colab_cli.repl import ColabREPL
@@ -366,7 +368,7 @@ def repl(
             repl_inst.run()
         finally:
             s.running = None
-            state.store.add(s)
+            state.store.update_if_present(s)
 
 
 def console(
@@ -394,7 +396,7 @@ def console(
         raise e
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
 
 
 def register(app: typer.Typer):

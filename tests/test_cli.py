@@ -798,3 +798,34 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
     assert result.exit_code != 0
     assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "still_recorded, expected",
+    [
+        (False, "Session 'qwen21' was stopped, so the running command ended."),
+        (True, "check it with `colab status -s qwen21`"),
+    ],
+    ids=["stopped", "disconnected"],
+)
+def test_main_explains_a_lost_connection(
+    mocker, capsys, mock_common_state, still_recorded, expected
+):
+    """`colab stop` from another terminal used to end a running `colab exec`
+    with a jupyter_kernel_client traceback. main() turns it into one line
+    and exit code 1."""
+    from colab_cli import cli
+    from colab_cli.runtime import SessionConnectionLost
+
+    mocker.patch.object(cli, "app", side_effect=SessionConnectionLost("qwen21"))
+    mock_common_state.store.get.return_value = (
+        MagicMock() if still_recorded else None
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert expected in err
+    assert "Traceback" not in err

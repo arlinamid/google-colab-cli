@@ -239,6 +239,7 @@ def restart_kernel(
     runtime = ColabRuntime(
         s.url,
         s.token,
+        session_name=s.name,
         kernel_id=s.kernel_id,
         session_id=s.session_id,
         on_kernel_started=on_started,
@@ -337,7 +338,9 @@ def stop(
 
     typer.echo(f"[colab] Stopping session '{name}'...")
     try:
-        runtime = ColabRuntime(s.url, s.token, kernel_id=s.kernel_id)
+        runtime = ColabRuntime(
+            s.url, s.token, kernel_id=s.kernel_id, session_name=s.name
+        )
         runtime.stop(shutdown_kernel=True)
     except Exception:
         pass
