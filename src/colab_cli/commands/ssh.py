@@ -417,9 +417,11 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
-    # POSIX OpenSSH re-parses this with /bin/sh. Windows OpenSSH uses cmd.exe,
-    # which does not honor single quotes.
-    return join_argv(self_cmd)
+    # POSIX OpenSSH re-parses this with /bin/sh. OpenSSH for Windows hands it
+    # to CreateProcess, so the child splits it with the MSVCRT rules (no
+    # cmd.exe, no single-quote quoting). Both expand %-tokens (%h, %p, ...)
+    # before that, so a literal '%' in a name or path must be written '%%'.
+    return join_argv(self_cmd).replace("%", "%%")
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:

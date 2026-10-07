@@ -23,6 +23,20 @@ from colab_cli.repl import ColabREPL
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _prompt_toolkit_app_session():
+    """ColabREPL builds a PromptSession, which needs a terminal. On Windows
+    without a console prompt_toolkit raises NoConsoleScreenBufferError, so
+    give every test prompt_toolkit's own pipe input and dummy output."""
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=DummyOutput()):
+            yield
+
+
 @pytest.fixture
 def mock_store(mock_common_state):
     return mock_common_state.store

@@ -251,8 +251,12 @@ def test_proxy_mode_rm_teardown_idempotent(mock_common_state, mocker):
         ssh_module, "_connect_websocket", return_value=MagicMock()
     )
 
+    # OpenSSH HUPs the ProxyCommand on POSIX; Windows has no SIGHUP, so the
+    # same teardown path is driven by SIGTERM there.
+    sig = getattr(_signal, "SIGHUP", _signal.SIGTERM)
+
     def bridge_then_hup(ws):
-        handlers[_signal.SIGHUP](_signal.SIGHUP, None)  # OpenSSH HUPs us
+        handlers[sig](sig, None)
         return 0
 
     mocker.patch.object(

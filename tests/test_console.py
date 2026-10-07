@@ -225,11 +225,55 @@ def test_read_stdin_eof_tty_does_not_close_ws(
             self.target()
 
     console_mod._is_running = True
-    with patch("colab_cli.console.threading.Thread", SyncThread):
+    # This is the POSIX raw-tty path. On Windows a TTY is read through
+    # msvcrt.getwch(), which would block this test waiting for a keypress.
+    with patch("colab_cli.console.threading.Thread", SyncThread), patch(
+        "colab_cli.console.is_windows", return_value=False
+    ):
         on_open(mock_ws)
 
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
     assert {"data": "exit\n"} not in sent_payloads
+    mock_ws.close.assert_not_called()
+
+
+@patch("colab_cli.console.os.get_terminal_size")
+@patch("colab_cli.console.sys.stdin.isatty")
+def test_read_stdin_windows_tty_sends_translated_keys(
+    mock_isatty, mock_get_term_size
+):
+    """On a Windows console, keys come from read_windows_key() (already
+    translated to ANSI) and are forwarded one character per message."""
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = True
+    mock_get_term_size.return_value = os.terminal_size((80, 24))
+    mock_ws = MagicMock()
+    keys = iter(["a", "\x1b[A"])
+
+    def fake_read_key():
+        try:
+            return next(keys)
+        except StopIteration:
+            console_mod._is_running = False
+            return ""
+
+    class SyncThread:
+        def __init__(self, target, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    console_mod._is_running = True
+    with patch("colab_cli.console.threading.Thread", SyncThread), patch(
+        "colab_cli.console.is_windows", return_value=True
+    ), patch("colab_cli.console.read_windows_key", side_effect=fake_read_key):
+        on_open(mock_ws)
+
+    sent = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
+    data = [p["data"] for p in sent if "data" in p]
+    assert data == ["a", "\x1b", "[", "A"]
     mock_ws.close.assert_not_called()
 
 

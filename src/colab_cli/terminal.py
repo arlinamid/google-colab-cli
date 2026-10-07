@@ -228,8 +228,10 @@ def join_argv(argv: list[str], *, windows: Optional[bool] = None) -> str:
     """Quote an argv for the shell that will re-parse it.
 
     POSIX OpenSSH runs ``ProxyCommand`` via ``/bin/sh`` (``shlex.join``).
-    Windows OpenSSH runs it via ``cmd.exe`` (``subprocess.list2cmdline``).
-    cmd.exe does not treat single quotes as quoting, so a POSIX-quoted path
+    OpenSSH for Windows passes it to ``CreateProcess`` and the child splits
+    it with the MSVCRT rules (``subprocess.list2cmdline``; checked against
+    OpenSSH_for_Windows_9.5p2, where ``a&b`` arrives as one literal argument).
+    Those rules do not treat single quotes as quoting, so a POSIX-quoted path
     such as ``'C:\\Program Files\\Python\\python.exe'`` is passed through
     literally and the bridge never starts.
     """

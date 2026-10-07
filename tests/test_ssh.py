@@ -249,7 +249,8 @@ def test_pump_stdin_uses_blocking_read_not_select():
 
 
 def test_proxy_command_windows_cmd_quoting(mocker):
-    """Windows OpenSSH parses ProxyCommand with cmd.exe."""
+    """OpenSSH for Windows splits ProxyCommand with the MSVCRT rules, which
+    only honor double quotes."""
     mocker.patch("colab_cli.terminal.is_windows", return_value=True)
     cmd = ssh_module._proxy_command(_make_session(name="my session"), None)
     assert '"my session"' in cmd
@@ -260,7 +261,8 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
     """Windows has no SIGHUP. Installing --rm handlers must not raise."""
     import signal
 
-    mocker.patch("colab_cli.commands.ssh.signal.SIGHUP", None)
+    # create=True: on Windows the attribute does not exist to be patched.
+    mocker.patch("colab_cli.commands.ssh.signal.SIGHUP", None, create=True)
     sigmock = mocker.patch("colab_cli.commands.ssh.signal.signal")
     ssh_module._install_rm_signal_handlers(lambda: None)
     registered = {call.args[0] for call in sigmock.call_args_list}
@@ -270,6 +272,36 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
 
 
 # --- ProxyCommand shell quoting ---------------------------------------------
+
+
+def _windows_command_line_to_argv(cmd: str) -> list[str]:
+    """Split a command line the way a Windows child process does (MSVCRT)."""
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.windll.shell32
+    shell32.CommandLineToArgvW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    argc = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(cmd, ctypes.byref(argc))
+    try:
+        return [argv[i] for i in range(argc.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(argv)
+
+
+def _split_like_openssh(cmd: str) -> list[str]:
+    """Undo what OpenSSH does to a ProxyCommand before the child sees argv."""
+    # %-token expansion comes first; only '%%' may appear, meaning '%'.
+    assert "%" not in cmd.replace("%%", ""), f"unescaped % in {cmd!r}"
+    cmd = cmd.replace("%%", "%")
+    if sys.platform == "win32":
+        return _windows_command_line_to_argv(cmd)
+    return shlex.split(cmd)
+
 
 
 @pytest.mark.parametrize(
@@ -282,6 +314,9 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
         "$(touch /tmp/pwned)",
         "a;rm -rf /",
         "ünïcode",
+        "a&b|c",
+        "100%",
+        "a%h",
     ],
     ids=[
         "word",
@@ -291,6 +326,9 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
         "cmd-substitution",
         "semicolon",
         "non-ascii",
+        "cmd-metachars",
+        "percent",
+        "percent-token",
     ],
 )
 @pytest.mark.parametrize(
@@ -299,12 +337,13 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
 def test_proxy_command_round_trips_through_the_shell(name, identity):
     """The ProxyCommand string must re-parse into the exact argv.
 
-    `ssh` hands the ProxyCommand to /bin/sh, so every argument has to survive
-    word-splitting verbatim -- a hostile session name must arrive as one
-    literal argument, never as a new word or a substitution.
+    `ssh` first expands %-tokens in the ProxyCommand, then hands it to
+    /bin/sh (POSIX) or CreateProcess (Windows), so every argument has to
+    survive both steps verbatim -- a hostile session name must arrive as one
+    literal argument, never as a new word, a substitution or a %-token.
     """
     cmd = ssh_module._proxy_command(_make_session(name=name), identity)
-    argv = shlex.split(cmd)
+    argv = _split_like_openssh(cmd)
 
     assert argv[:7] == [
         sys.executable,
