@@ -15,6 +15,8 @@
 import json
 import os
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 try:
@@ -151,14 +153,17 @@ def test_read_stdin_eof_piped_sends_exit_and_closes_ws(
     mock_stdin, mock_isatty, mock_get_term_size
 ):
     """When stdin is piped and reaches EOF, the read thread should send 'exit\\n'
-    to the remote shell and then close the websocket from the client side.
+    to the remote shell and, if the backend never closes the websocket, close
+    it from the client side after the timeout.
 
     The remote shell at /colab/tty is wrapped in tmux which swallows the bare
     \\x04 (Ctrl-D) we used to send, so EOF used to leave the websocket open
-    indefinitely. Sending 'exit\\n' + ws.close() guarantees clean termination.
+    indefinitely. Sending 'exit\\n' + the fallback ws.close() guarantees clean
+    termination.
     """
     import colab_cli.console as console_mod
 
+    console_mod._closed.clear()
     mock_isatty.return_value = False
     # Simulate piped stdin: returns one line then EOF
     mock_stdin.read.side_effect = ["e", "c", "h", "o", " ", "h", "i", "\n", ""]
@@ -180,8 +185,8 @@ def test_read_stdin_eof_piped_sends_exit_and_closes_ws(
 
     console_mod._is_running = True
     with patch("colab_cli.console.threading.Thread", SyncThread):
-        # Use a tiny grace period for the test
-        with patch("colab_cli.console.PIPED_EOF_GRACE_SECONDS", 0.01):
+        # The mock backend never closes, so use a tiny fallback timeout.
+        with patch("colab_cli.console.PIPED_EOF_CLOSE_TIMEOUT_SECONDS", 0.01):
             on_open(mock_ws)
 
     # Collect what was sent to the websocket
@@ -195,6 +200,59 @@ def test_read_stdin_eof_piped_sends_exit_and_closes_ws(
 
     # Verify we closed the websocket from the client side
     mock_ws.close.assert_called_once()
+
+
+@patch("colab_cli.console.os.get_terminal_size")
+@patch("colab_cli.console.sys.stdin.isatty")
+@patch("colab_cli.console.sys.stdin")
+def test_read_stdin_eof_piped_waits_for_server_close(
+    mock_stdin, mock_isatty, mock_get_term_size
+):
+    """After 'exit\\n' the client waits for the backend to close the socket
+    (which it does once tmux exits, after the last output) instead of closing
+    it after a fixed delay. On a freshly started runtime the shell can take
+    more than the old 0.5s to answer, and the early close dropped its output.
+    """
+    import colab_cli.console as console_mod
+
+    console_mod._closed.clear()
+    mock_isatty.return_value = False
+    mock_stdin.read.side_effect = ["l", "s", "\n", ""]
+    mock_get_term_size.return_value = os.terminal_size((80, 24))
+    mock_ws = MagicMock()
+    # Created before threading.Thread is patched below: Timer.__init__ looks
+    # Thread up by name and would get the synchronous stand-in.
+    server_close = threading.Timer(
+        0.05, console_mod.on_close, args=(mock_ws, 1000, "")
+    )
+
+    def backend(payload):
+        # The backend answers 'exit' by closing the socket a moment later.
+        if json.loads(payload).get("data") == "exit\n":
+            server_close.start()
+
+    mock_ws.send.side_effect = backend
+
+    class SyncThread:
+        def __init__(self, target, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    console_mod._is_running = True
+    # A fixed 0.01s grace would have closed before the backend did; the wait
+    # must outlast that and end on the server-side close, well before 5s.
+    with patch("colab_cli.console.threading.Thread", SyncThread), patch(
+        "colab_cli.console.PIPED_EOF_CLOSE_TIMEOUT_SECONDS", 5.0
+    ):
+        started = time.monotonic()
+        on_open(mock_ws)
+        elapsed = time.monotonic() - started
+
+    assert console_mod._closed.is_set()
+    mock_ws.close.assert_not_called()
+    assert elapsed < 4.0
 
 
 @patch("colab_cli.console.os.get_terminal_size")

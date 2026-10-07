@@ -19,7 +19,6 @@ import os
 import signal
 import sys
 import threading
-import time
 
 try:
     import termios
@@ -52,13 +51,17 @@ _last_error = None
 # because the local terminal's answers could never reach the remote side.
 _output_filter: Optional[TerminalQueryFilter] = None
 
-# When stdin is piped and reaches EOF, we send "exit\n" to the remote shell and
-# then wait this many seconds for any remaining output (the shell's goodbye,
-# tmux teardown messages, etc.) to flush before closing the websocket from the
-# client side. Empirically 0.5s is enough for the typical /colab/tty backend
-# wrapped in tmux + bash; bumping it just delays exit, lowering it risks
-# truncating tail output.
-PIPED_EOF_GRACE_SECONDS = 0.5
+# When stdin is piped and reaches EOF, we send "exit\n" to the remote shell.
+# Once bash exits, tmux exits and the backend closes the websocket itself, so
+# we wait for that close rather than for a fixed time. A fixed 0.5s grace cut
+# off the output on a freshly started runtime: the first attach often needs
+# 0.5-1s before the shell answers, and the client closed the socket before
+# anything came back (2 of 3 fresh-VM runs). This is only the fallback for a
+# backend that never closes; as with `echo cmd | ssh host`, a piped command
+# that runs longer than this is cut off.
+PIPED_EOF_CLOSE_TIMEOUT_SECONDS = 30.0
+# Set by on_close, so the stdin thread can wait for the server-side close.
+_closed = threading.Event()
 
 
 def on_message(ws, message):
@@ -88,6 +91,7 @@ def on_close(ws, close_status_code, close_msg):
     """Callback for when the websocket is closed."""
     global _is_running
     _is_running = False
+    _closed.set()
 
 
 def send_terminal_size(ws):
@@ -133,18 +137,18 @@ def on_open(ws):
                             # endpoint wraps bash in tmux which intercepts \x04
                             # (Ctrl-D) as a literal character, so it never exits.
                             # Instead send "exit\n" so bash voluntarily terminates,
-                            # wait a short grace period for the shell's goodbye
-                            # output to drain back to us, then close the websocket
-                            # ourselves to guarantee the client unblocks.
+                            # wait for the backend to close the websocket once the
+                            # shell is gone (all output has arrived by then), and
+                            # only close it ourselves if that never happens.
                             try:
                                 ws.send(json.dumps({"data": "exit\n"}))
                             except Exception:
                                 pass
-                            time.sleep(PIPED_EOF_GRACE_SECONDS)
-                            try:
-                                ws.close()
-                            except Exception:
-                                pass
+                            if not _closed.wait(PIPED_EOF_CLOSE_TIMEOUT_SECONDS):
+                                try:
+                                    ws.close()
+                                except Exception:
+                                    pass
                         break
                     chunks = [char]
                 for chunk in chunks:
@@ -162,6 +166,7 @@ def connect_console(session: SessionState):
     """
     global _is_running, _last_error, _output_filter
     _last_error = None
+    _closed.clear()
     # cmd.exe and Windows PowerShell 5.1 do not enable ANSI processing by
     # default. The remote PTY speaks ANSI, and we write those bytes straight
     # to stdout.buffer, so the console mode has to be switched first.
