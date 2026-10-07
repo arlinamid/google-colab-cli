@@ -18,7 +18,6 @@ import os
 import re
 import sys
 import typer
-import uuid
 from nbformat.v4 import new_output
 from rich.console import Console
 from typing import List, Optional
@@ -27,10 +26,17 @@ from typing_extensions import Annotated
 from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
+from colab_cli.notebook import (
+    TITLE_REGEX,  # noqa: F401  (re-exported; it used to live here)
+    CellSelectionError,
+    CodeCell,
+    code_cells,
+    preflight,
+    select_cells,
+)
 
 _console = Console()
 
-TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -137,6 +143,74 @@ def display_output(out, output_image=None):
         pass
 
 
+def _load_code_blocks(file: Optional[str], cells_spec: Optional[str]):
+    """Read what `colab exec` should run. Returns (notebook or None, blocks).
+
+    Each block is a dict with the code and a human-readable ``label``;
+    notebook blocks also carry the cell, its number, title and id.
+    """
+    if file:
+        if not os.path.isfile(file):
+            typer.echo(f"[colab] File not found: '{file}'", err=True)
+            raise typer.Exit(1)
+        if not file.endswith(".ipynb"):
+            with open(file, "r") as f:
+                return None, [{"code": f.read(), "id": None, "label": file, "title": ""}]
+        typer.echo(f"[colab] Parsing notebook '{file}'...")
+        try:
+            with open(file, "r", encoding="utf-8") as f:
+                nb = nbformat.read(f, as_version=4)
+            nbformat.validate(nb)
+        except Exception as e:
+            typer.echo(f"[colab] Cannot read notebook '{file}': {e}", err=True)
+            raise typer.Exit(2)
+        try:
+            selected = select_cells(code_cells(nb), cells_spec)
+        except CellSelectionError as e:
+            typer.echo(f"[colab] {e}", err=True)
+            raise typer.Exit(2)
+        return nb, [
+            {
+                "code": c.source,
+                "id": c.id,
+                "cell": c.cell,
+                "number": c.number,
+                "title": c.title,
+                "label": c.label,
+            }
+            for c in selected
+        ]
+    if is_stdin_tty():
+        typer.echo("[colab] Error: No input provided. Pipe code or provide a file.")
+        raise typer.Exit(1)
+    return None, [{"code": sys.stdin.read(), "id": None, "label": "stdin", "title": ""}]
+
+
+def _check_blocks(blocks) -> None:
+    """The --check pre-flight: report every problem, run nothing if any."""
+    problems = preflight(
+        [
+            CodeCell(
+                number=b.get("number", 1),
+                id=b.get("id"),
+                title=b.get("title", ""),
+                source=b["code"],
+                name=None if "number" in b else b["label"],
+            )
+            for b in blocks
+        ]
+    )
+    if problems:
+        typer.echo(
+            f"[colab] Check failed ({len(problems)} problem(s)); nothing was run:",
+            err=True,
+        )
+        for problem in problems:
+            typer.echo(f"  {problem}", err=True)
+        raise typer.Exit(2)
+    typer.echo(f"[colab] Check passed ({len(blocks)} cell(s)).")
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -161,37 +235,73 @@ def exec_command(
             ),
         ),
     ] = None,
+    cells: Annotated[
+        Optional[str],
+        typer.Option(
+            "--cells",
+            help=(
+                "Notebooks only: run just these code cells, in this order. "
+                "Comma-separated code-cell numbers (from 1, markdown cells not "
+                "counted), ranges such as 2-5, #@title values or cell ids."
+            ),
+        ),
+    ] = None,
+    stop_on_error: Annotated[
+        bool,
+        typer.Option(
+            "--stop-on-error",
+            help="Notebooks only: stop at the first cell that raises an error.",
+        ),
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help=(
+                "Before running anything, check the selected cells locally "
+                "(notebook structure, --cells, Python syntax with IPython "
+                "magics allowed). Nothing runs if a check fails."
+            ),
+        ),
+    ] = False,
+    check_only: Annotated[
+        bool,
+        typer.Option(
+            "--check-only",
+            help=(
+                "Run the --check checks and print which cells would run, "
+                "without a session and without executing anything."
+            ),
+        ),
+    ] = False,
 ):
-    """Execute code in a session"""
+    """Execute code in a session.
+
+    Exits with code 1 if the code (or any notebook cell) raised an error.
+    """
     from colab_cli.common import state
 
     env_vars = _parse_env_vars(env)
-    name = state.resolve_session(session)
-    s = state.get_session(name)
+    is_nb = bool(file and file.endswith(".ipynb"))
+    if (cells is not None or stop_on_error) and not is_nb:
+        typer.echo(
+            "[colab] --cells and --stop-on-error only apply to .ipynb notebooks.",
+            err=True,
+        )
+        raise typer.Exit(2)
 
-    code_blocks = []
-    if file:
-        if file.endswith(".ipynb"):
-            typer.echo(f"[colab] Parsing notebook '{file}'...")
-            with open(file, "r", encoding="utf-8") as f:
-                nb = nbformat.read(f, as_version=4)
-                for cell in nb.cells:
-                    # nbformat v4.5+ requires 'id' at the top level
-                    if not hasattr(cell, "id") or not cell.id:
-                        cell.id = str(uuid.uuid4())
+    if not check_only:
+        name = state.resolve_session(session)
+        s = state.get_session(name)
 
-                    if cell.cell_type == "code":
-                        code_blocks.append(
-                            {"code": cell.source, "id": cell.id, "cell": cell}
-                        )
-        else:
-            with open(file, "r") as f:
-                code_blocks.append({"code": f.read(), "id": None})
-    else:
-        if is_stdin_tty():
-            typer.echo("[colab] Error: No input provided. Pipe code or provide a file.")
-            raise typer.Exit(1)
-        code_blocks.append({"code": sys.stdin.read(), "id": None})
+    nb, code_blocks = _load_code_blocks(file, cells)
+
+    if check or check_only:
+        _check_blocks(code_blocks)
+        if check_only:
+            plan = ", ".join(b["label"] for b in code_blocks) or "nothing"
+            typer.echo(f"[colab] Would run: {plan}")
+            raise typer.Exit(0)
 
     if not any(b["code"].strip() for b in code_blocks):
         raise typer.Exit(0)
@@ -227,27 +337,22 @@ def exec_command(
             raise typer.Exit(1)
         raise e
 
+    failed = []
     try:
-        is_nb = file and file.endswith(".ipynb")
         s.running = f"exec({file or 'stdin'})"
         state.store.add(s)
 
+        total = len(code_blocks)
         for i, block in enumerate(code_blocks):
             code = _build_env_prelude(env_vars) + block["code"]
             identifier = None
             if is_nb:
-                title_match = TITLE_REGEX.search(code)
-                if title_match:
-                    identifier = title_match.group(1).strip()
-                elif block.get("id"):
-                    identifier = block["id"]
-                else:
-                    identifier = ""
-
+                identifier = block["title"] or block.get("id") or ""
                 identifier_str = f" - {identifier}" if identifier else ""
-                typer.echo(
-                    f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}..."
-                )
+                position = f"{i + 1}/{total}"
+                if cells is not None:
+                    position = f"{block['number']} ({position})"
+                typer.echo(f"[colab] Executing cell {position}{identifier_str}...")
 
             s.last_execution = (
                 file or "stdin",
@@ -269,19 +374,38 @@ def exec_command(
                 {
                     "code": code,
                     "outputs": outputs,
-                    "cell_index": i if len(code_blocks) > 1 else None,
+                    "cell_index": (
+                        block["number"] - 1 if is_nb else None
+                    ),
                     "cell_id": block.get("id"),
                 },
             )
+            if any(o.get("output_type") == "error" for o in outputs or []):
+                failed.append(block["label"])
+                if stop_on_error and i + 1 < total:
+                    typer.echo(
+                        f"[colab] Stopping at {block['label']} (--stop-on-error); "
+                        f"{total - i - 1} cell(s) not run.",
+                        err=True,
+                    )
+                    break
     finally:
         s.running = None
         state.store.update_if_present(s)
         runtime.stop()
-        if file and file.endswith(".ipynb"):
+        if is_nb:
             output_file = os.path.splitext(file)[0] + "_output.ipynb"
             typer.echo(f"[colab] Saving notebook with outputs to '{output_file}'...")
             with open(output_file, "w", encoding="utf-8") as f:
                 nbformat.write(nb, f)
+
+    if failed:
+        if is_nb:
+            typer.echo(
+                f"[colab] {len(failed)} cell(s) raised an error: {', '.join(failed)}",
+                err=True,
+            )
+        raise typer.Exit(1)
 
 
 def repl(

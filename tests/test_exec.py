@@ -235,7 +235,8 @@ def test_cli_exec_outputs(
     mock_runtime.execute_code.side_effect = mock_execute_code
 
     result = runner.invoke(app, ["exec", "-s", "s1"], input="do_stuff()")
-    assert result.exit_code == 0
+    # The code raised an error, so exec reports failure (it used to exit 0).
+    assert result.exit_code == 1
 
     mock_handle_image.assert_any_call("png_data", "image/png", target_path=None)
     mock_handle_image.assert_any_call("jpeg_data", "image/jpeg", target_path=None)
