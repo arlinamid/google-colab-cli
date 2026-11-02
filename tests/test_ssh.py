@@ -98,6 +98,32 @@ def test_resolve_pubkey_missing_identity_exits(tmp_path):
     assert exc_info.value.exit_code == 2
 
 
+def test_pubkey_derivation_never_reads_the_ssh_pipe(mocker, tmp_path):
+    """ssh-keygen must not inherit stdin, or a passphrase prompt blocks forever."""
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mock_run = mocker.patch(
+        "subprocess.run",
+        return_value=MagicMock(stdout="ssh-ed25519 AAAA fake\n", returncode=0),
+    )
+    ssh_module._resolve_pubkey(str(key))
+    _, kwargs = mock_run.call_args
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["timeout"] > 0
+
+
+def test_pubkey_derivation_timeout_exits_with_passphrase_hint(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch(
+        "subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["ssh-keygen"], 20),
+    )
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
 @pytest.mark.parametrize(
     ("run_side_effect", "run_return"),
     [

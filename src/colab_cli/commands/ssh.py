@@ -83,13 +83,25 @@ def _pubkey_from_identity(identity: str) -> str:
     if not os.path.exists(identity):
         typer.echo(f"[colab] --identity {identity}: file not found.", err=True)
         raise typer.Exit(code=2)
+    # ssh-keygen prompts for a passphrase on the inherited stdin. Under
+    # ProxyCommand that stdin is the open ssh pipe, so the prompt waits
+    # forever; DEVNULL makes it fail fast, and the timeout bounds the rest.
     try:
         res = subprocess.run(
             ["ssh-keygen", "-y", "-f", identity],
             check=True,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=20,
         )
+    except subprocess.TimeoutExpired:
+        typer.echo(
+            f"[colab] ssh-keygen did not finish for {identity}; the key may be "
+            "passphrase-protected. Use a key without a passphrase.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         typer.echo(
             f"[colab] failed to derive public key from {identity}: {e}",
