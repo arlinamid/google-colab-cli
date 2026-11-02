@@ -454,8 +454,12 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
         argv += ["--identity", identity]
     argv += ["--colab-internal-mode", mode]
     if sys.platform == "win32":
-        return subprocess.list2cmdline(argv)
-    return shlex.join(argv)
+        command = subprocess.list2cmdline(argv)
+    else:
+        command = shlex.join(argv)
+    # OpenSSH expands %-tokens (%h, %p, ...) in ProxyCommand before running
+    # it, so a literal '%' in a session name or identity path must be '%%'.
+    return command.replace("%", "%%")
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:

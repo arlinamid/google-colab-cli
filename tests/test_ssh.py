@@ -621,3 +621,12 @@ def test_proxy_command_keeps_global_options(
         *[sys.executable, "-m", "colab_cli.cli", *global_args, "ssh"],
         *["--proxy-mode", "-s", "s", "--colab-internal-mode", "interactive"],
     ]
+
+
+def test_proxy_command_escapes_percent_for_openssh_tokens(mocker):
+    """OpenSSH expands %-tokens in ProxyCommand, so a literal '%' must be '%%'."""
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    cmd = ssh_module._proxy_command(_make_session(name="a%h"), None, "interactive")
+
+    assert "a%%h" in cmd
+    assert "a%h" not in cmd.replace("a%%h", "")
