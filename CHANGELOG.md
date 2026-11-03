@@ -10,6 +10,11 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Fixed
+
+- **ssh, windows:** `colab ssh` and `colab forward` work from Git Bash: they run Windows OpenSSH instead of the MSYS `ssh` first on PATH, which broke the ProxyCommand (`exec: C:Users...python.exe: not found`).
+- **ssh:** a passphrase-protected key no longer hangs `colab ssh`/`colab forward` when there is no terminal to ask on; it exits with a message instead.
+
 ## [0.7.5.1] - 2026-11-03
 
 First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extra features on top. Versions are numbered 0.7.5.N to show the Google release they are based on.

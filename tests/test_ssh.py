@@ -87,7 +87,9 @@ def test_resolve_pubkey_with_identity_calls_ssh_keygen(mocker, tmp_path):
     out = ssh_module._resolve_pubkey(str(key))
     assert out == fake_pub
     args, _ = mock_run.call_args
-    assert args[0][:3] == ["ssh-keygen", "-y", "-f"]
+    # On Windows this is the full Windows OpenSSH path (see _openssh_tool).
+    assert os.path.splitext(os.path.basename(args[0][0]))[0] == "ssh-keygen"
+    assert args[0][1:3] == ["-y", "-f"]
     assert args[0][3] == str(key)
 
 
@@ -143,6 +145,7 @@ def test_pubkey_derivation_prompts_for_passphrase(mocker, tmp_path):
         raise _passphrase_error(cmd)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     getpass = mocker.patch("getpass.getpass", return_value="secret")
     assert ssh_module._resolve_pubkey(str(key)) == fake_pub
     getpass.assert_called_once()
@@ -152,6 +155,7 @@ def test_pubkey_derivation_wrong_passphrase_exits_2(mocker, tmp_path):
     key = tmp_path / "id_test"
     key.write_text("(fake private key)")
     mocker.patch("subprocess.run", side_effect=_passphrase_error(["ssh-keygen"]))
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     mocker.patch("getpass.getpass", return_value="wrong")
     with pytest.raises(typer.Exit) as exc_info:
         ssh_module._resolve_pubkey(str(key))

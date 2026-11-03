@@ -50,6 +50,7 @@ from typing import Callable, List, Optional, Sequence
 from urllib.parse import urlparse
 import uuid
 
+from colab_cli import secrets as colab_secrets
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.commands import execution
@@ -72,6 +73,40 @@ _SSH_MODES = ("interactive", _DEFAULT_SSH_MODE, _CMD_SSH_MODE)
 _MAX_SSH_SESSIONS = 5
 
 
+# Set by the colab process that starts ssh, for its ProxyCommand child:
+# whether a person can answer a passphrase prompt. The child's stdin is the ssh
+# pipe, so it cannot tell by itself; getpass would wait forever without one.
+_CAN_PROMPT_ENV = "COLAB_CLI_SSH_CAN_PROMPT"
+
+
+def _openssh_tool(name: str) -> str:
+    """The OpenSSH executable to run: Windows OpenSSH on Windows, else PATH.
+
+    The ProxyCommand is quoted for Windows OpenSSH, which starts it with
+    CreateProcess. Under Git Bash the first ``ssh`` on PATH is MSYS ssh, which
+    runs it through /bin/bash and strips the backslashes from the python path
+    ("exec: C:Users...python.exe: not found").
+    """
+    if sys.platform == "win32":
+        path = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            "System32",
+            "OpenSSH",
+            f"{name}.exe",
+        )
+        if os.path.isfile(path):
+            return path
+    return name
+
+
+def _can_prompt_for_passphrase() -> bool:
+    """True if a person can answer a passphrase prompt in this process."""
+    flag = os.environ.get(_CAN_PROMPT_ENV)
+    if flag is not None:
+        return flag == "1"
+    return colab_secrets._can_prompt()
+
+
 def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProcess:
     """Runs ``ssh-keygen -y`` to print the public key of ``identity``.
 
@@ -86,7 +121,7 @@ def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProce
       FileNotFoundError: If ssh-keygen is not installed.
     """
     return subprocess.run(
-        ["ssh-keygen", "-y", "-f", identity, "-P", passphrase],
+        [_openssh_tool("ssh-keygen"), "-y", "-f", identity, "-P", passphrase],
         check=True,
         capture_output=True,
         text=True,
@@ -109,6 +144,8 @@ def _derive_with_passphrase_prompt(identity: str) -> subprocess.CompletedProcess
         (exit code 2).
     """
     try:
+        if not _can_prompt_for_passphrase():
+            raise EOFError
         passphrase = getpass.getpass(
             f"[colab] Passphrase for {identity}: ", stream=sys.stderr
         )
@@ -583,7 +620,7 @@ def _ssh_base_args(
     running without a forward that failed to bind (port already in use).
     """
     args = [
-        "ssh",
+        _openssh_tool("ssh"),
         "-o",
         f"ProxyCommand={proxy_command}",
         "-o",
@@ -608,11 +645,18 @@ def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
     The backend only counts kernel activity as use, so a forward alone would
     let the runtime idle out; ``keep_alive`` pings from this process.
     """
+    # Without a person at a terminal, nothing may prompt: tell the ProxyCommand
+    # child (which derives the public key), and keep ssh itself from asking
+    # for a key passphrase (BatchMode) instead of waiting forever.
+    can_prompt = colab_secrets._can_prompt()
+    env = {**os.environ, _CAN_PROMPT_ENV: "1" if can_prompt else "0"}
+    if not can_prompt:
+        args = [args[0], "-o", "BatchMode=yes", *args[1:]]
     if not keep_alive:
-        return subprocess.call(args)
+        return subprocess.call(args, env=env)
     from colab_cli.common import state
 
-    proc = subprocess.Popen(args)
+    proc = subprocess.Popen(args, env=env)
     return wait_with_keep_alive(proc, state.client, session.endpoint)
 
 
