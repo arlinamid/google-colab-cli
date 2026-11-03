@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: A uv tool install is detected on Windows too (`\uv\tools\` paths), so the upgrade hint and `--install` use uv there instead of pip.
 2026-11-03: The update check watches two sources: this fork's latest GitHub release (offered and installed by `colab update --install`, as its wheel) and Google's PyPI package (only announced when it is newer than the Google version the install is based on, never installed: that would drop the fork's changes).
 2026-11-03: Added section 11 (secrets, Hugging Face, clone, share, keepalive; details in 07_secrets_tunnels_integrations.md). `run_automation` now returns its outputs, can run in the session's own kernel (`session_kernel=True`), and `HistoryLogger.add_redaction` writes registered secret values as `***`.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
@@ -219,13 +220,14 @@ How each provider supplies the scope:
         and `latest_wheel_url` (that release's wheel).
 -   **Notification**: a newer fork release prints the upgrade banner with
     `Run 'pip install --upgrade <wheel URL>' to update.` (or
-    `uv tool install --force <wheel URL>` for a uv tool install); a release
+    `uv tool install --force <wheel URL>` for a uv tool install, on every OS); a release
     without a wheel points to the releases page. On Linux and macOS the banner
     also says `You can run 'colab update --install' to upgrade in place.` The
     cached banner shown between fetches uses `Run 'colab update' to update.`
 -   **Self-install (`--install`)**: an opt-in flag that installs the cached
     `latest_wheel_url` in place (**Linux and macOS**): `uv tool install --force
-    <wheel>` when `sys.executable` contains `/uv/tools`, otherwise
+    <wheel>` when `sys.executable` is inside a `uv/tools` directory (either
+    path separator, so it is also detected on Windows), otherwise
     `<sys.executable> -m pip install -U <wheel>`. With no known wheel it exits 1
     and points to the releases page. When the cached `latest_version` is not
     newer than the install it is a silent no-op; a failing install command's

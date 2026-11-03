@@ -167,13 +167,22 @@ def announce_upgrade(
 # ---------- Orchestration -----------------------------------------------
 
 
-def _get_install_command(wheel_url: Optional[str]) -> str:
-    """Return the command that installs the fork's release wheel."""
+def _is_uv_tool_install() -> bool:
+    """True if this CLI runs from a `uv tool install` environment.
+
+    The path is normalized first: on Windows it is ...\\uv\\tools\\..., so a
+    plain "/uv/tools/" check missed it and suggested pip.
+    """
     import sys
 
+    return "/uv/tools/" in sys.executable.replace("\\", "/")
+
+
+def _get_install_command(wheel_url: Optional[str]) -> str:
+    """Return the command that installs the fork's release wheel."""
     if not wheel_url:
         return f"see {RELEASES_PAGE}"
-    if is_self_install_supported() and "/uv/tools/" in sys.executable:
+    if _is_uv_tool_install():
         return f"uv tool install --force {wheel_url}"
     return f"pip install --upgrade {wheel_url}"
 
@@ -298,9 +307,8 @@ def self_install() -> None:
         )
         raise typer.Exit(code=1)
 
-    # If the executable path contains "/uv/", we assume it was installed via
-    # `uv tool install` and use `uv` to replace it.
-    if "/uv/tools/" in sys.executable:
+    # Installed via `uv tool install`: use `uv` to replace it.
+    if _is_uv_tool_install():
         cmd = ["uv", "tool", "install", "--force", wheel_url]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "-U", wheel_url]

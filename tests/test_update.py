@@ -758,3 +758,24 @@ def test_github_api_request_sends_a_user_agent(app_version, fake_settings, mock_
     requests_made = [c.args[0] for c in opened.call_args_list]
     fork_req = next(r for r in requests_made if "fork.test" in getattr(r, "full_url", r))
     assert fork_req.get_header("User-agent").startswith("colab-cli")
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        r"C:\Users\me\AppData\Roaming\uv\tools\google-colab-cli\Scripts\python.exe",
+        "/home/user/.local/share/uv/tools/google-colab-cli/bin/python",
+    ],
+)
+def test_uv_tool_install_detected_on_every_os(
+    mocker, app_version, fake_settings, mock_sources, executable
+):
+    """Windows paths use backslashes; the uv tool install must still be seen."""
+    app_version("1.0.0")
+    mock_sources(fork="1.1.0")
+    fake_settings()
+    mocker.patch("sys.executable", executable)
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Windows")
+
+    result = runner.invoke(app, ["update"])
+    assert f"Run 'uv tool install --force {WHEEL.format(v='1.1.0')}' to update." in result.output
