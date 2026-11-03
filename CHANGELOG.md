@@ -16,6 +16,7 @@ Still based on Google's Colab CLI 0.7.5.
 
 ### Added
 
+- **release:** standalone `colab` binaries for Windows, Linux and macOS (x64) are attached to every release, built with PyInstaller: no Python or uv needed. The binary runs itself as the ssh ProxyCommand, so `colab ssh` and `colab forward` work from it; `colab update` points binary users to the download.
 - **stop:** `colab stop --orphans` lists the server-side runtimes that have no local session (`[?]` in `colab sessions`) and stops them after asking (`--yes` to skip the question). They may include runtimes opened in the Colab web UI or on another machine, so nothing is stopped without that list.
 
 ### Fixed

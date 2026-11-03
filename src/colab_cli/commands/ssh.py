@@ -642,7 +642,12 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
     """
     from colab_cli.common import state
 
-    argv = [sys.executable, "-m", "colab_cli.cli"]
+    if getattr(sys, "frozen", False):
+        # The standalone binary (PyInstaller) has no separate Python to run
+        # `-m colab_cli.cli` with; the binary itself is the CLI.
+        argv = [sys.executable]
+    else:
+        argv = [sys.executable, "-m", "colab_cli.cli"]
     if state.auth_provider is not AuthProvider.OAUTH2:
         argv += ["--auth", state.auth_provider.value]
     if state.config_path:
