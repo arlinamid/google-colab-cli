@@ -17,7 +17,6 @@
 import json
 import os
 import signal
-import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -80,8 +79,20 @@ def test_proxy_command_launches_with_literal_arguments(
     assert json.loads(result.stdout) == expected
 
 
+def _windows_openssh():
+    """The Windows OpenSSH client, not whichever `ssh` is first on PATH.
+
+    Under Git Bash, PATH finds MSYS ssh first; it runs ProxyCommand through
+    /bin/sh, which mangles Windows paths, so it does not test CreateProcess.
+    """
+    path = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", "ssh.exe"
+    )
+    return path if os.path.exists(path) else None
+
+
 @pytest.mark.skipif(
-    sys.platform != "win32" or not shutil.which("ssh"),
+    sys.platform != "win32" or not _windows_openssh(),
     reason="requires Windows OpenSSH",
 )
 def test_windows_openssh_starts_proxy(tmp_path, windows_python, monkeypatch):
@@ -106,7 +117,7 @@ def test_windows_openssh_starts_proxy(tmp_path, windows_python, monkeypatch):
     # and its arguments are under test. No network connection is made.
     subprocess.run(
         [
-            "ssh",
+            _windows_openssh(),
             "-F",
             os.devnull,
             "-o",
