@@ -44,6 +44,7 @@ def test_secret_set_injects_value_and_redacts(runtime, mock_common_state, monkey
 
 def test_secret_set_multiple_and_sources(runtime, monkeypatch, mocker):
     monkeypatch.setenv("LOCAL_A", "aaa111")
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     mocker.patch("getpass.getpass", return_value="bbb222")
     result = runner.invoke(
         app, ["secret", "set", "-s", "s1", "A=env:LOCAL_A", "B=prompt"]

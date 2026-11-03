@@ -50,6 +50,7 @@ def test_login_falls_back_to_hf_cli_then_prompt(runtime, monkeypatch, mocker):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     mocker.patch("colab_cli.secrets._token_from_cli", return_value=None)
     mocker.patch("colab_cli.secrets._hf_token_file", return_value=None)
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     gp = mocker.patch("getpass.getpass", return_value="hf_typed")
     result = runner.invoke(app, ["hf", "login", "-s", "s1"])
     assert result.exit_code == 0, result.output

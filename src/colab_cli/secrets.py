@@ -101,6 +101,29 @@ def _token_from_cli(argv: List[str]) -> Optional[str]:
     return res.stdout.strip() or None
 
 
+def _can_prompt() -> bool:
+    """True when a person can answer a prompt.
+
+    getpass reads the console on Windows and blocks forever when there is
+    none (CI, agents, piped runs), so only prompt when stdin is a terminal.
+    On Windows isatty() is also true for the NUL device, so ask the console
+    API whether stdin really is a console.
+    """
+    if sys.stdin is None or not sys.stdin.isatty():
+        return False
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        import msvcrt
+
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def _hf_token_file() -> Optional[str]:
     path = os.environ.get("HF_TOKEN_PATH") or os.path.join(
         os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface"),
@@ -124,6 +147,8 @@ def read_source(name: str, source: str) -> Optional[str]:
     if source.startswith("env:"):
         return os.environ.get(source[4:]) or None
     if source == "prompt":
+        if not _can_prompt():
+            _fail(f"No terminal to ask for {name}. Use env:VAR instead.")
         try:
             return getpass.getpass(f"[colab] {name}: ", stream=sys.stderr) or None
         except (EOFError, OSError):

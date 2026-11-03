@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -71,12 +72,14 @@ def test_env_source_missing_returns_none(monkeypatch):
 
 
 def test_prompt_source(mocker):
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     gp = mocker.patch("getpass.getpass", return_value="typed")
     assert secrets.read_source("HF_TOKEN", "prompt") == "typed"
     assert "HF_TOKEN" in gp.call_args.args[0]
 
 
 def test_prompt_source_without_terminal_exits_2(mocker):
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     mocker.patch("getpass.getpass", side_effect=EOFError)
     with pytest.raises(typer.Exit) as exc_info:
         secrets.read_source("HF_TOKEN", "prompt")
@@ -165,3 +168,38 @@ def test_parse_source_option():
     assert secrets.parse_source("env:X") == "env:X"
     with pytest.raises(typer.Exit):
         secrets.parse_source("hf_literal_token")
+
+
+def test_prompt_without_terminal_fails_fast_instead_of_hanging(mocker):
+    """On Windows getpass reads the console and blocks forever when there is
+    none (CI, agents); with no terminal on stdin, never call it."""
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=False)
+    gp = mocker.patch("getpass.getpass")
+    with pytest.raises(typer.Exit) as exc_info:
+        secrets.read_source("HF_TOKEN", "prompt")
+    assert exc_info.value.exit_code == 2
+    gp.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows NUL device quirk")
+def test_can_prompt_is_false_for_nul_stdin_on_windows():
+    """isatty() is true for NUL on Windows; getpass would then hang."""
+    out = subprocess.run(
+        [sys.executable, "-c", "from colab_cli import secrets; print(secrets._can_prompt())"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert out.stdout.strip() == "False", out.stderr
+
+
+def test_can_prompt_is_false_for_piped_stdin():
+    out = subprocess.run(
+        [sys.executable, "-c", "from colab_cli import secrets; print(secrets._can_prompt())"],
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert out.stdout.strip() == "False", out.stderr

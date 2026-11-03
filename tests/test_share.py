@@ -96,6 +96,7 @@ def test_ngrok_without_token_exits_2_before_runtime(runtime, keep_alive, mocker)
 
 
 def test_ngrok_token_from_prompt(runtime, keep_alive, mocker):
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     mocker.patch("getpass.getpass", return_value="typed_ngrok")
     result = runner.invoke(
         app, ["share", "-s", "s1", "7860", "--via", "ngrok", "--token", "prompt"]

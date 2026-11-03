@@ -121,6 +121,7 @@ def test_token_none_disables_auto_token(runtime, monkeypatch):
 
 
 def test_token_prompt(runtime, mocker):
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     mocker.patch("getpass.getpass", return_value="typed_tok")
     result = runner.invoke(app, ["clone", "-s", "s1", "a/b", "--token", "prompt"])
     assert result.exit_code == 0, result.output
