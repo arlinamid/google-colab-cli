@@ -29,6 +29,7 @@ from colab_cli.commands import (
     files,
     automation,
     run,
+    secret,
     ssh,
     utility,
     usage,
@@ -163,6 +164,7 @@ execution.register(app)
 files.register(app)
 automation.register(app)
 run.register(app)
+secret.register(app)
 ssh.register(app)
 utility.register(app)
 usage.register(app)

@@ -26,6 +26,7 @@ from typing_extensions import Annotated
 from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
+from colab_cli.secrets import resolve_secrets
 from colab_cli.notebook import (
     TITLE_REGEX,  # noqa: F401  (re-exported; it used to live here)
     CellSelectionError,
@@ -38,6 +39,13 @@ from colab_cli.notebook import (
 _console = Console()
 
 ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+SECRET_HELP = (
+    "Set a secret in the remote kernel's environment without putting its "
+    "value on the command line: NAME[=SOURCE], SOURCE is env (the local "
+    "NAME variable, default), env:VAR, prompt, hf-cli or gh-cli. The value "
+    "is written as *** in the history log. Repeat for multiple secrets."
+)
 
 
 def is_stdin_tty() -> bool:
@@ -237,9 +245,13 @@ def exec_command(
             "--env",
             help=(
                 "Set an environment variable in the remote kernel as KEY=VALUE. "
-                "Repeat for multiple variables."
+                "Repeat for multiple variables. For tokens use --secret."
             ),
         ),
+    ] = None,
+    secret: Annotated[
+        Optional[List[str]],
+        typer.Option("--secret", help=SECRET_HELP),
     ] = None,
     cells: Annotated[
         Optional[str],
@@ -313,6 +325,8 @@ def exec_command(
 
     if not any(b["code"].strip() for b in code_blocks):
         raise typer.Exit(0)
+
+    env_vars.update(resolve_secrets(secret, state.history))
 
     def on_started(kid):
         s.kernel_id = kid

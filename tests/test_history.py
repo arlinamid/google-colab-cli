@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import tempfile
 import shutil
 import unittest
@@ -46,6 +47,33 @@ class TestHistory(unittest.TestCase):
         self.assertIn("s1", sessions)
         self.assertIn("s2", sessions)
         self.assertEqual(len(sessions), 2)
+
+    def test_redacted_values_never_reach_the_log_file(self):
+        secret = "hf_SuperSecret123"
+        self.logger.add_redaction(secret)
+        code = f"import os\nos.environ['HF_TOKEN'] = {secret!r}\n"
+        self.logger.log_event(
+            "s", "execution", {"code": code, "outputs": [{"text": secret}]}
+        )
+        with open(os.path.join(self.test_dir, "s.jsonl"), encoding="utf-8") as f:
+            raw = f.read()
+        self.assertNotIn(secret, raw)
+        event = self.logger.get_history("s")[0]
+        self.assertIn("***", event["code"])
+        self.assertEqual(event["outputs"][0]["text"], "***")
+
+    def test_redaction_covers_json_and_repr_escaped_forms(self):
+        secret = "tok\"en\\with'quotes"
+        self.logger.add_redaction(secret)
+        self.logger.log_event("s", "execution", {"code": repr(secret), "raw": secret})
+        event = self.logger.get_history("s")[0]
+        self.assertNotIn("en\\with", event["code"])
+        self.assertNotIn("en\\with", event["raw"])
+
+    def test_empty_redaction_is_ignored(self):
+        self.logger.add_redaction("")
+        self.logger.log_event("s", "event", {"x": "abc"})
+        self.assertEqual(self.logger.get_history("s")[0]["x"], "abc")
 
 
 if __name__ == "__main__":

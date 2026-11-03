@@ -693,3 +693,36 @@ def test_run_with_timeout_flag(
     code_calls = mock_runtime.execute_code.call_args_list
     body_call = next(c for c in code_calls if "hello from script" in c.args[0])
     assert body_call.kwargs.get("timeout") == 3600.0
+
+
+def test_run_secret_sets_env_and_registers_redaction(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+    mock_common_state,
+    monkeypatch,
+):
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+    monkeypatch.setenv("HF_TOKEN", "hf_run_secret")
+
+    result = runner.invoke(app, ["run", "--secret", "HF_TOKEN", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    code_calls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    body = next(c for c in code_calls if "hello from script" in c)
+    assert "os.environ['HF_TOKEN'] = 'hf_run_secret'" in body
+    mock_common_state.history.add_redaction.assert_called_with("hf_run_secret")
+
+
+def test_run_missing_secret_errors_before_assign(mock_client, script_path, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    result = runner.invoke(app, ["run", "--secret", "HF_TOKEN", str(script_path)])
+    assert result.exit_code == 2
+    mock_client.assign.assert_not_called()

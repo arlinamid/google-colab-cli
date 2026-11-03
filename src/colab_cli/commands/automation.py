@@ -165,10 +165,17 @@ def run_automation(
                     sys.stderr.write("".join(tb) + "\n")
                 else:
                     sys.stderr.write(f"{ename}: {evalue}\n")
+        return outputs
     finally:
         s.running = None
         state.store.update_if_present(s)
         runtime.stop()
+
+
+def exit_if_failed(outputs) -> None:
+    """Exits 1 if the kernel reported an error (run_automation already printed it)."""
+    if any(o.get("output_type") == "error" for o in outputs or []):
+        raise typer.Exit(code=1)
 
 
 def auth(
