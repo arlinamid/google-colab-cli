@@ -38,11 +38,18 @@ class SessionState(BaseModel):
 
 
 class Settings(BaseModel):
+    # Google's official package: only announced, never installed by this fork.
     update_url: str = "https://pypi.org/pypi/google-colab-cli/json"
+    # This fork's latest GitHub release: the source of installable updates.
+    fork_release_url: str = (
+        "https://api.github.com/repos/arlinamid/google-colab-cli/releases/latest"
+    )
     last_check: Optional[datetime] = None
     enable_update_check: bool = True
-    # Highest version seen on the update source; cached for the banner.
+    # Highest fork version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
+    # Wheel of that fork release, installed by `colab update --install`.
+    latest_wheel_url: Optional[str] = None
 
 
 class _LockedFileStore:

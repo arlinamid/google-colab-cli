@@ -315,14 +315,14 @@ def update_command(
         typer.Option(
             "--install",
             help=(
-                "After checking, run 'pip install -U google-colab-cli' to "
-                "upgrade the CLI in place. No-op if already up to date. "
-                "Linux only."
+                "After checking, install the latest release of this fork "
+                "(its GitHub release wheel) in place. No-op if already up to "
+                "date. Linux and macOS only."
             ),
         ),
     ] = False,
 ):
-    """Check for latest version and print if an update is available"""
+    """Check this fork's releases for an update; also report new Google releases"""
     auto_update.check_for_updates(quiet=False)
     if not install:
         return

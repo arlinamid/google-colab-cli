@@ -16,6 +16,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
 
 ### Changed
 
+- **update:** `colab update` and the daily check offer this fork's GitHub releases (and `colab update --install` installs the release wheel). Google's PyPI releases are only announced when Google ships a newer base version, never installed, so an update can no longer replace the fork with Google's package.
 - **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh`, `cmd` for `colab ssh -- CMD`, and `proxy` otherwise.
 - **ssh:** When the server rejects a connection with HTTP 429 and reports its
   SSH session limit, `colab ssh` now says the limit is reached (N of N sessions

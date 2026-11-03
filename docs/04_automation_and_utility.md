@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: The update check watches two sources: this fork's latest GitHub release (offered and installed by `colab update --install`, as its wheel) and Google's PyPI package (only announced when it is newer than the Google version the install is based on, never installed: that would drop the fork's changes).
 2026-11-03: Added section 11 (secrets, Hugging Face, clone, share, keepalive; details in 07_secrets_tunnels_integrations.md). `run_automation` now returns its outputs, can run in the session's own kernel (`session_kernel=True`), and `HistoryLogger.add_redaction` writes registered secret values as `***`.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
@@ -195,42 +196,40 @@ How each provider supplies the scope:
     `whoami`. The list lives as `_AUTO_UPDATE_SUPPRESSED` in the global
     Typer callback in `cli.py`.
 -   **Manual-check**: `colab update` forces a check and prints the status.
--   **Implementation**:
-    -   Fetches a PyPI-style JSON document from a configurable `update_url`
-        (default: `https://pypi.org/pypi/google-colab-cli/json`) and reads
-        `info.version`.
-    -   Compares the fetched version with the current CLI version using
-        PEP 440 / semantic versioning, falling back to string equality when a
-        version is unparseable.
-    -   Persists the following fields in `~/.config/colab-cli/settings.json`:
-        -   `update_url`: source configuration.
-        -   `last_check`: timestamp of the last fetch (drives the daily
-            throttle).
-        -   `enable_update_check`: master switch for both the daily fetch and
-            the cached banner.
-        -   `latest_version`: highest version observed during the most
-            recent successful check. Updated whenever a strictly-newer
-            version is observed (never downgraded), and preserved verbatim
-            across failed checks so transient network issues do not erase
-            the cache.
--   **Notification**: If a new version is found, a non-intrusive message is
-    printed to the console with a `Run 'pip install --upgrade google-colab-cli' to
-    update.` hint. On Linux and macOS platforms where `--install` self-update is supported,
-    an additional hint `You can run 'colab update --install' to upgrade in place.`
-    is displayed above the pip/uv install command. The cached banner shown between
-    fetches uses the generic `Run 'colab update' to update.` hint.
--   **Self-install (`--install`)**: An opt-in `--install` flag (default
-    `False`) makes `colab update` upgrade the CLI in place (**Linux and macOS**).
-    It detects how the CLI was installed:
-    - If `sys.executable` contains `/uv/tools` (indicating it was installed via
-      `uv tool install`), it runs `uv tool install -U google-colab-cli`.
-    - Otherwise, runs `pip install -U google-colab-cli` using `sys.executable`
-      to ensure the upgrade lands in the same interpreter.
-    On other platforms, the command exits non-zero with an explanatory
-    message. When the cached `latest_version` is already at or below the
-    current install, the flag is a silent no-op so it is safe to wire into
-    automation. If the upgrade command exits non-zero, `colab update --install`
-    propagates the same exit code.
+-   **Two sources** (this repository is a fork of Google's CLI):
+    -   **Fork releases** (`fork_release_url`, default
+        `https://api.github.com/repos/arlinamid/google-colab-cli/releases/latest`):
+        the release tag (`v0.7.5.1` -> `0.7.5.1`) and its `.whl` asset. This is
+        the only source of offered and installed upgrades.
+    -   **Google's PyPI package** (`update_url`, default
+        `https://pypi.org/pypi/google-colab-cli/json`): `info.version` is only
+        announced, as `Google released Colab CLI X; this fork is based on Y`,
+        when it is newer than the Google version the install is based on
+        (`_base_version`: the first three parts, `0.7.5.1` -> `0.7.5`), and not
+        already included in a pending fork upgrade. It is never offered for
+        installation: installing Google's package would replace the fork and
+        drop its changes.
+    -   Versions are compared with PEP 440, falling back to string equality when
+        a version is unparseable. Requests send a `User-Agent` (GitHub requires
+        one). One failed source does not stop the other.
+    -   Persisted in `~/.config/colab-cli/settings.json`: `update_url`,
+        `fork_release_url`, `last_check` (daily throttle), `enable_update_check`
+        (master switch for the fetch and the cached banner), `latest_version`
+        (highest fork version seen, never downgraded, kept across failed checks)
+        and `latest_wheel_url` (that release's wheel).
+-   **Notification**: a newer fork release prints the upgrade banner with
+    `Run 'pip install --upgrade <wheel URL>' to update.` (or
+    `uv tool install --force <wheel URL>` for a uv tool install); a release
+    without a wheel points to the releases page. On Linux and macOS the banner
+    also says `You can run 'colab update --install' to upgrade in place.` The
+    cached banner shown between fetches uses `Run 'colab update' to update.`
+-   **Self-install (`--install`)**: an opt-in flag that installs the cached
+    `latest_wheel_url` in place (**Linux and macOS**): `uv tool install --force
+    <wheel>` when `sys.executable` contains `/uv/tools`, otherwise
+    `<sys.executable> -m pip install -U <wheel>`. With no known wheel it exits 1
+    and points to the releases page. When the cached `latest_version` is not
+    newer than the install it is a silent no-op; a failing install command's
+    exit code is propagated. Other platforms exit non-zero with a message.
 
 ### 9. Identity Inspection (`colab whoami`) [developer-only]
 
