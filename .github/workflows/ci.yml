@@ -74,7 +74,8 @@ jobs:
         run: |
           uv venv --python 3.12 smoke
           if [ "$RUNNER_OS" = "Windows" ]; then bin=smoke/Scripts; else bin=smoke/bin; fi
-          uv pip install --python "$bin/python" dist/*.whl
+          # The venv directory works on every OS (Windows has python.exe).
+          uv pip install --python smoke dist/*.whl
           "$bin/colab" version
           if "$bin/colab" version | grep -q "0\.1\.dev"; then echo "version 0.1.devN: release tags missing"; exit 1; fi
           "$bin/colab" --help > /dev/null
