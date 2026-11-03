@@ -1,6 +1,7 @@
 ---
 log:
 2026-11-03: Initial design and implementation: secret specs and history redaction (`colab secret set`, `--secret` on `exec`/`run`), ssh port forwarding with keep-alive (`colab ssh -L`, `colab forward`), `colab hf login/download`, `colab clone`, `colab share` (cloudflared/ngrok) and `colab keepalive`. Verified live on Windows against a CPU runtime.
+2026-11-03: Second live run. Fixed a hang: a prompt source with no console blocked forever on Windows (`isatty()` is true for NUL); `_can_prompt()` now checks `GetConsoleMode`. Verified a private-repo clone with `gh auth token`, two simultaneous `-L` forwards, share replacement on the same port, `colab keepalive --minutes 1`. Documented the cross-command redaction limit.
 ---
 
 # Design: Secrets, Port Forwarding, Tunnels and Integrations
@@ -117,6 +118,18 @@ with credentials are refused. `DEST` defaults to `/content/<name>`.
   and its base64 form are redacted. `GIT_TERMINAL_PROMPT=0` prevents a hang.
 - Only cloning is in scope; pushing, branches and PRs are not.
 
+## Known limitations
+
+- Redaction happens in the process that resolved the secret. If a later,
+  separate command (for example `colab exec` without `--secret`) prints the
+  value, that output is logged as is, because that process does not know the
+  value. Avoid printing secrets; `colab log` shows what was recorded.
+- `prompt` needs an interactive console. In CI, agents and piped runs it
+  exits 2; use `env:VAR`. The local `hf auth token` command exists only in
+  newer `huggingface_hub` releases; older ones fall back to the token file.
+- `colab forward` and foreground `colab share` stop with Ctrl+C only; for
+  scripts use `colab ssh -L PORT -- CMD` or `colab share --detach`.
+
 ## Testing Strategy (TDD)
 
 - `tests/test_secrets.py`, `tests/test_history.py` (redaction),
@@ -137,3 +150,13 @@ HTTP 200, `--list` showed it and `--stop` made it return 530. Not run live:
 the ngrok path (needs the user's authtoken), a private-repository clone and
 `hf login` with a real token, and the interactive Ctrl+C paths of
 `colab forward` / foreground `colab share`.
+
+Second live run (Windows, CPU runtime, 2026-11-03): a literal secret was
+refused (exit 2); `secret set` + `exec --secret` values reached the exec
+kernel and were absent from the history; a private repository cloned with the
+local `gh auth token` (token absent from `.git/config` and from the history,
+including its base64 form), and `--token none` on it failed with exit 1;
+`-L 8000 -L 9001:localhost:8000` served both ports; `share --via ngrok` with
+no token exited 2 at once; a cloudflared share of a directory holding only a
+test file returned HTTP 200, a second share on the same port replaced it, and
+`--stop` removed it; `colab keepalive --minutes 1` exited after 64 s.
