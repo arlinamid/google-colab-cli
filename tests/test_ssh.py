@@ -124,6 +124,50 @@ def test_pubkey_derivation_timeout_exits_with_passphrase_hint(mocker, tmp_path):
     assert exc_info.value.exit_code == 2
 
 
+def _passphrase_error(cmd):
+    return subprocess.CalledProcessError(
+        1,
+        cmd,
+        stderr='Load key "x": incorrect passphrase supplied to decrypt private key',
+    )
+
+
+def test_pubkey_derivation_prompts_for_passphrase(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    fake_pub = "ssh-ed25519 AAAA fake"
+
+    def fake_run(cmd, **kwargs):
+        if "-P" in cmd and cmd[cmd.index("-P") + 1] == "secret":
+            return MagicMock(stdout=fake_pub + "\n", returncode=0)
+        raise _passphrase_error(cmd)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    getpass = mocker.patch("getpass.getpass", return_value="secret")
+    assert ssh_module._resolve_pubkey(str(key)) == fake_pub
+    getpass.assert_called_once()
+
+
+def test_pubkey_derivation_wrong_passphrase_exits_2(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch("subprocess.run", side_effect=_passphrase_error(["ssh-keygen"]))
+    mocker.patch("getpass.getpass", return_value="wrong")
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
+def test_pubkey_derivation_without_terminal_exits_2(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch("subprocess.run", side_effect=_passphrase_error(["ssh-keygen"]))
+    mocker.patch("getpass.getpass", side_effect=EOFError)
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
 @pytest.mark.parametrize(
     ("run_side_effect", "run_return"),
     [

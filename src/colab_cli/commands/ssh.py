@@ -35,6 +35,7 @@ the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
 """
 
 import contextlib
+import getpass
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,72 @@ _SSH_MODES = ("interactive", _DEFAULT_SSH_MODE)
 _MAX_SSH_SESSIONS = 5
 
 
+def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProcess:
+    """Runs ``ssh-keygen -y`` to print the public key of ``identity``.
+
+    ``-P`` supplies the passphrase so ssh-keygen never reads stdin. Under
+    ProxyCommand stdin is the open ssh pipe, so a prompt there would block
+    forever; DEVNULL and the timeout are a second guard.
+
+    Raises:
+      subprocess.CalledProcessError: If ssh-keygen exits non-zero (for example
+        a wrong or missing passphrase on an encrypted key).
+      subprocess.TimeoutExpired: If ssh-keygen does not finish in time.
+      FileNotFoundError: If ssh-keygen is not installed.
+    """
+    return subprocess.run(
+        ["ssh-keygen", "-y", "-f", identity, "-P", passphrase],
+        check=True,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=20,
+    )
+
+
+def _derive_with_passphrase_prompt(identity: str) -> subprocess.CompletedProcess:
+    """Asks for the passphrase on the terminal and derives the public key.
+
+    getpass reads the controlling terminal (the console on Windows, /dev/tty on
+    POSIX), so the prompt works even though stdin is the ssh pipe.
+
+    Returns:
+      The completed ``ssh-keygen`` run.
+
+    Raises:
+      typer.Exit: If there is no terminal to ask on, or the passphrase is wrong
+        (exit code 2).
+    """
+    try:
+        passphrase = getpass.getpass(
+            f"[colab] Passphrase for {identity}: ", stream=sys.stderr
+        )
+    except (EOFError, OSError):
+        typer.echo(
+            f"[colab] {identity} is passphrase-protected and no terminal is "
+            "available to ask for it. Run `colab ssh` from a terminal, or use "
+            "a key without a passphrase.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    try:
+        return _run_ssh_keygen(identity, passphrase)
+    except subprocess.CalledProcessError:
+        typer.echo(f"[colab] wrong passphrase for {identity}.", err=True)
+        raise typer.Exit(code=2)
+    except subprocess.TimeoutExpired:
+        typer.echo(
+            f"[colab] ssh-keygen did not finish for {identity}.", err=True
+        )
+        raise typer.Exit(code=2)
+    except FileNotFoundError as e:
+        typer.echo(
+            f"[colab] failed to derive public key from {identity}: {e}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+
 def _pubkey_from_identity(identity: str) -> str:
     """Derives the public key from a private key via ``ssh-keygen -y -f``.
 
@@ -83,18 +150,8 @@ def _pubkey_from_identity(identity: str) -> str:
     if not os.path.exists(identity):
         typer.echo(f"[colab] --identity {identity}: file not found.", err=True)
         raise typer.Exit(code=2)
-    # ssh-keygen prompts for a passphrase on the inherited stdin. Under
-    # ProxyCommand that stdin is the open ssh pipe, so the prompt waits
-    # forever; DEVNULL makes it fail fast, and the timeout bounds the rest.
     try:
-        res = subprocess.run(
-            ["ssh-keygen", "-y", "-f", identity],
-            check=True,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=20,
-        )
+        res = _run_ssh_keygen(identity, passphrase="")
     except subprocess.TimeoutExpired:
         typer.echo(
             f"[colab] ssh-keygen did not finish for {identity}; the key may be "
@@ -102,7 +159,15 @@ def _pubkey_from_identity(identity: str) -> str:
             err=True,
         )
         raise typer.Exit(code=2)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+    except subprocess.CalledProcessError as e:
+        if "passphrase" not in (e.stderr or "").lower():
+            typer.echo(
+                f"[colab] failed to derive public key from {identity}: {e}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        res = _derive_with_passphrase_prompt(identity)
+    except FileNotFoundError as e:
         typer.echo(
             f"[colab] failed to derive public key from {identity}: {e}",
             err=True,
