@@ -10,8 +10,14 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Added
+
+- **stop:** `colab stop --orphans` lists the server-side runtimes that have no local session (`[?]` in `colab sessions`) and stops them after asking (`--yes` to skip the question). They may include runtimes opened in the Colab web UI or on another machine, so nothing is stopped without that list.
+
 ### Fixed
 
+- **ssh, windows:** `ssh.exe` and its proxy no longer keep running after the `colab` process that started them is killed (a closed terminal tab, a stopped tool): they are tied to it with a kill-on-close job object.
+- **ssh:** the proxy's WebSocket handshake gives up after 30 s instead of waiting forever; an open session has no time limit.
 - **ssh, windows:** `colab ssh` and `colab forward` work from Git Bash: they run Windows OpenSSH instead of the MSYS `ssh` first on PATH, which broke the ProxyCommand (`exec: C:Users...python.exe: not found`).
 - **ssh:** a passphrase-protected key no longer hangs `colab ssh`/`colab forward` when there is no terminal to ask on; it exits with a message instead.
 

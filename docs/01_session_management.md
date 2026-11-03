@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: `colab stop --orphans [--yes]` lists and, after confirmation, unassigns server-side runtimes with no local session.
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.

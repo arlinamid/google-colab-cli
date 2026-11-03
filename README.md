@@ -86,6 +86,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab status [-s NAME]` | Display hardware, machine shape, status, and local metadata for active sessions |
 | `colab restart-kernel [-s NAME]` | Restart the active session's Jupyter kernel |
 | `colab stop [-s NAME]` | Terminate a session VM and release its resources |
+| `colab stop --orphans [--yes]` | List server-side runtimes with no local session (`[?]` in `colab sessions`) and stop them after confirmation |
 | `colab url [-s NAME] [--open]` | Print or open a browser URL connecting to the active session |
 
 ### Execution

@@ -73,6 +73,11 @@ _SSH_MODES = ("interactive", _DEFAULT_SSH_MODE, _CMD_SSH_MODE)
 _MAX_SSH_SESSIONS = 5
 
 
+_CONNECT_TIMEOUT_SEC = 30
+# Handle of the kill-on-close job this process is in (Windows); kept open for
+# the life of the process. See _kill_children_with_this_process.
+_JOB_HANDLE = None
+
 # Set by the colab process that starts ssh, for its ProxyCommand child:
 # whether a person can answer a passphrase prompt. The child's stdin is the ssh
 # pipe, so it cannot tell by itself; getpass would wait forever without one.
@@ -97,6 +102,76 @@ def _openssh_tool(name: str) -> str:
         if os.path.isfile(path):
             return path
     return name
+
+
+def _kill_children_with_this_process() -> None:
+    """Windows: make ssh and its ProxyCommand die with this colab process.
+
+    Windows does not end child processes with their parent, so a colab that
+    was killed (a closed terminal tab, a stopped tool) left ssh.exe and its
+    proxy running. Putting this process in a job object with
+    KILL_ON_JOB_CLOSE makes the system end every process started after it
+    when the last handle closes, which happens when this process exits in
+    any way. POSIX shells already send SIGHUP to the whole job.
+    """
+    global _JOB_HANDLE
+    if sys.platform != "win32" or _JOB_HANDLE is not None:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+            )]
+
+        class _ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimits),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = _ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+        extended_limit_information = 9
+        if kernel32.SetInformationJobObject(
+            wintypes.HANDLE(job),
+            extended_limit_information,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ) and kernel32.AssignProcessToJobObject(
+            wintypes.HANDLE(job), wintypes.HANDLE(kernel32.GetCurrentProcess())
+        ):
+            _JOB_HANDLE = job
+        else:
+            kernel32.CloseHandle(wintypes.HANDLE(job))
+    except Exception:  # Best effort: never block ssh over cleanup.
+        pass
 
 
 def _can_prompt_for_passphrase() -> bool:
@@ -475,7 +550,11 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
     agent = COLAB_CLIENT_AGENT_HEADER
     header = [f"{_PUBKEY_HEADER}: {pubkey}", f"{agent['key']}: {agent['value']}"]
     try:
-        ws.connect(url, header=header)
+        # Bounded, so an unanswered handshake cannot leave the ProxyCommand
+        # (and the ssh above it) waiting forever. The timeout stays on the
+        # socket, so lift it: an idle ssh session must not time out.
+        ws.connect(url, header=header, timeout=_CONNECT_TIMEOUT_SEC)
+        ws.settimeout(None)
         return ws
     except websocket.WebSocketBadStatusException as e:
         status = getattr(e, "status_code", None)
@@ -650,6 +729,7 @@ def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
     # for a key passphrase (BatchMode) instead of waiting forever.
     can_prompt = colab_secrets._can_prompt()
     env = {**os.environ, _CAN_PROMPT_ENV: "1" if can_prompt else "0"}
+    _kill_children_with_this_process()
     if not can_prompt:
         args = [args[0], "-o", "BatchMode=yes", *args[1:]]
     if not keep_alive:
