@@ -27,6 +27,11 @@ jobs:
           # hatch-vcs derives the version from git tags.
           fetch-depth: 0
 
+      # A fork has no release tags, which would make the version 0.1.devN.
+      - name: Fetch upstream release tags
+        shell: bash
+        run: git fetch --tags --force https://github.com/googlecolab/google-colab-cli.git 'refs/tags/v*:refs/tags/v*'
+
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
@@ -53,6 +58,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch upstream release tags
+        shell: bash
+        run: git fetch --tags --force https://github.com/googlecolab/google-colab-cli.git 'refs/tags/v*:refs/tags/v*'
+
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -67,6 +76,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then bin=smoke/Scripts; else bin=smoke/bin; fi
           uv pip install --python "$bin/python" dist/*.whl
           "$bin/colab" version
+          if "$bin/colab" version | grep -q "0\.1\.dev"; then echo "version 0.1.devN: release tags missing"; exit 1; fi
           "$bin/colab" --help > /dev/null
           for cmd in secret hf clone forward share keepalive ssh exec run; do
             "$bin/colab" "$cmd" --help > /dev/null

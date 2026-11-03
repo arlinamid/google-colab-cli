@@ -151,7 +151,9 @@ def test_drivemount_hook_runs_off_the_websocket_thread(
     assert hook(other, MagicMock()) is False
 
 
-def test_drivemount_help_documents_authuser():
+def test_drivemount_help_documents_authuser(mocker):
+    # The update check is a network call; its banner must not decide the test.
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
     result = runner.invoke(app, ["drivemount", "--help"])
     assert result.exit_code == 0
     assert "--authuser" in result.output
