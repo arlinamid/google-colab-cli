@@ -127,3 +127,8 @@ def test_missing_huggingface_hub_is_explained(runtime):
     runtime.execute_code.side_effect = capture
     runner.invoke(app, ["hf", "download", "-s", "s1", "x/y"])
     assert "colab install huggingface_hub" in code_holder["code"]
+
+
+def test_download_uses_a_long_timeout(runtime):
+    runner.invoke(app, ["hf", "download", "-s", "s1", "x/y"])
+    assert runtime.execute_code.call_args.kwargs["timeout"] >= 600

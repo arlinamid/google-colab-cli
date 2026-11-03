@@ -152,3 +152,8 @@ def test_clone_failure_exits_1(runtime):
 def test_bad_depth_exits_2(runtime):
     result = runner.invoke(app, ["clone", "-s", "s1", "a/b", "--depth", "0"])
     assert result.exit_code == 2
+
+
+def test_clone_uses_a_long_timeout(runtime):
+    runner.invoke(app, ["clone", "-s", "s1", "a/b"])
+    assert runtime.execute_code.call_args.kwargs["timeout"] >= 600

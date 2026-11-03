@@ -68,3 +68,33 @@ def test_secret_set_kernel_error_exits_1(runtime, monkeypatch):
     ]
     result = runner.invoke(app, ["secret", "set", "-s", "s1", "HF_TOKEN"])
     assert result.exit_code == 1
+
+
+def test_secret_set_targets_the_session_kernel(mock_common_state, mocker, monkeypatch):
+    """`colab exec` reuses the session's kernel; the secret must land there."""
+    s = SessionState(
+        name="s1", token="t", url="https://u", endpoint="e1",
+        kernel_id="k-1", session_id="sess-1",
+    )
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "s1"
+    runtime_class = mocker.patch("colab_cli.commands.automation.ColabRuntime")
+    runtime_class.return_value.execute_code.return_value = []
+    monkeypatch.setenv("HF_TOKEN", "abc123")
+
+    result = runner.invoke(app, ["secret", "set", "-s", "s1", "HF_TOKEN"])
+
+    assert result.exit_code == 0, result.output
+    kwargs = runtime_class.call_args.kwargs
+    assert kwargs["kernel_id"] == "k-1"
+    assert kwargs["session_id"] == "sess-1"
+
+
+def test_install_still_uses_a_fresh_kernel(mock_common_state, mocker):
+    s = SessionState(name="s1", token="t", url="https://u", endpoint="e1", kernel_id="k-1")
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "s1"
+    runtime_class = mocker.patch("colab_cli.commands.automation.ColabRuntime")
+    runtime_class.return_value.execute_code.return_value = []
+    runner.invoke(app, ["install", "-s", "s1", "pandas"])
+    assert "kernel_id" not in runtime_class.call_args.kwargs

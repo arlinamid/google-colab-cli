@@ -55,7 +55,7 @@ def set_secrets(
     name = state.resolve_session(session)
     values = resolve_secrets(specs, state.history)
     code = build_secret_prelude(values) + f"print('Set: ' + ', '.join({list(values)!r}))\n"
-    exit_if_failed(run_automation(name, "secret", code))
+    exit_if_failed(run_automation(name, "secret", code, session_kernel=True))
 
 
 def register(app: typer.Typer):
