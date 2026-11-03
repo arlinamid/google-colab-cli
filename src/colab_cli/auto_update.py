@@ -14,8 +14,13 @@
 
 """Auto-update subsystem.
 
-Owns version detection, the PyPI-style update probe, the on-disk
-``latest_version`` cache, and the upgrade-banner UX. The CLI's global
+Owns version detection, the update probes, the on-disk ``latest_version``
+cache, and the upgrade-banner UX.
+
+This is a fork of Google's CLI, so it watches two sources: the fork's latest
+GitHub release, which is what gets offered and installed, and Google's PyPI
+package, which is only announced when Google ships a newer base version.
+Installing Google's package would replace the fork and drop its changes. The CLI's global
 callback (``cli.py``) calls ``check_for_updates`` once per day and
 ``maybe_show_cached_banner`` on every other invocation; the
 ``colab update`` Typer command (``commands/utility.py``) delegates to
@@ -38,6 +43,9 @@ from colab_cli.state import Settings
 
 # PyPI distribution name (different from the importable package name `colab`).
 PYPI_PACKAGE_NAME = "google-colab-cli"
+RELEASES_PAGE = "https://github.com/arlinamid/google-colab-cli/releases"
+# GitHub's API requires a User-Agent header.
+_USER_AGENT = "colab-cli update check"
 
 
 # ---------- Version detection -------------------------------------------
@@ -73,10 +81,36 @@ def _parse_version(payload: Optional[dict]) -> Optional[str]:
     return (payload or {}).get("info", {}).get("version")
 
 
-def _fetch_pypi(url: str, quiet: bool) -> Optional[dict]:
-    """Fetches and parses the PyPI-style JSON document at ``url``."""
+def _parse_fork_release(
+    payload: Optional[dict],
+) -> tuple[Optional[str], Optional[str]]:
+    """Returns ``(version, wheel_url)`` from a GitHub "latest release" payload."""
+    tag = (payload or {}).get("tag_name") or ""
+    version = (tag[1:] if tag.startswith("v") else tag) or None
+    wheel = next(
+        (
+            a.get("browser_download_url")
+            for a in (payload or {}).get("assets", [])
+            if str(a.get("name", "")).endswith(".whl")
+        ),
+        None,
+    )
+    return version, wheel
+
+
+def _base_version(version: str) -> str:
+    """The Google release a fork version builds on: ``0.7.5.1`` -> ``0.7.5``."""
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        return ".".join(str(p) for p in Version(version).release[:3])
+    except InvalidVersion:
+        return version
+
+
+def _fetch_pypi(url: str, quiet: bool) -> Optional[dict]:
+    """Fetches and parses the JSON document at ``url`` (PyPI or GitHub API)."""
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         if not quiet:
@@ -133,44 +167,65 @@ def announce_upgrade(
 # ---------- Orchestration -----------------------------------------------
 
 
-def _get_install_command() -> str:
-    """Return the recommended installation command based on the environment."""
+def _get_install_command(wheel_url: Optional[str]) -> str:
+    """Return the command that installs the fork's release wheel."""
     import sys
 
+    if not wheel_url:
+        return f"see {RELEASES_PAGE}"
     if is_self_install_supported() and "/uv/tools/" in sys.executable:
-        return f"uv tool install -U {PYPI_PACKAGE_NAME}"
-    return f"pip install --upgrade {PYPI_PACKAGE_NAME}"
+        return f"uv tool install --force {wheel_url}"
+    return f"pip install --upgrade {wheel_url}"
+
+
+def announce_upstream(google_version: str, base: str) -> None:
+    """Tell the user Google released a newer base; never offer to install it."""
+    typer.echo(
+        f"[colab] Google released Colab CLI {google_version}; this fork is based "
+        f"on {base}. Watch {RELEASES_PAGE} for a fork release based on it."
+    )
 
 
 def check_for_updates(quiet: bool = False) -> None:
-    """Check PyPI for updates and print a message if a new version is available.
+    """Check the fork's releases (and Google's PyPI) and report updates.
 
-    The disable-hint is appended to the banner only when ``quiet`` is True
-    (the daily background fetch); explicit ``colab update`` invocations
-    (``quiet=False``) omit it because the user asked for the check.
+    An upgrade is offered only from the fork's latest GitHub release. Google's
+    PyPI release is reported when it is newer than the Google version this
+    install is based on. The disable-hint is appended to the banner only when
+    ``quiet`` is True (the daily background fetch); explicit ``colab update``
+    invocations (``quiet=False``) omit it because the user asked for the check.
     """
     settings = state.settings_store.load()
     current = get_app_version()
 
     try:
-        pypi = _fetch_pypi(settings.update_url, quiet)
-        pypi_v = _parse_version(pypi)
+        fork_v, wheel = _parse_fork_release(
+            _fetch_pypi(settings.fork_release_url, quiet)
+        )
+        google_v = _parse_version(_fetch_pypi(settings.update_url, quiet))
 
-        if _is_newer(pypi_v, current):
+        if _is_newer(fork_v, current):
             announce_upgrade(
-                pypi_v,
+                fork_v,
                 current,
-                _get_install_command(),
+                _get_install_command(wheel),
                 show_disable_hint=quiet,
             )
         elif not quiet:
-            suffix = f", latest: {pypi_v}" if pypi_v else ""
+            suffix = f", latest: {fork_v}" if fork_v else ""
             typer.echo(f"[colab] Colab CLI is up to date (version: {current}{suffix}).")
 
-        # Cache the highest observed version; never downgrade.
+        # Compare Google's release with the base of the newest fork version we
+        # know of, so a pending fork upgrade that already includes it is quiet.
+        newest = fork_v if _is_newer(fork_v, current) else current
+        if _is_newer(google_v, _base_version(newest)):
+            announce_upstream(google_v, _base_version(current))
+
+        # Cache the highest observed fork version; never downgrade.
         cached = settings.latest_version or "0"
-        if _is_newer(pypi_v, cached):
-            settings.latest_version = pypi_v
+        if _is_newer(fork_v, cached):
+            settings.latest_version = fork_v
+            settings.latest_wheel_url = wheel
 
         settings.last_check = datetime.now(timezone.utc)
         state.settings_store.save(settings)
@@ -232,15 +287,23 @@ def run_background_check() -> None:
 
 
 def self_install() -> None:
-    """Upgrade the CLI in place, detecting uv vs pip."""
+    """Install the fork's latest release wheel in place, detecting uv vs pip."""
     import sys
 
+    wheel_url = state.settings_store.load().latest_wheel_url
+    if not wheel_url:
+        typer.echo(
+            f"[colab] No release wheel is known; download it from {RELEASES_PAGE}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     # If the executable path contains "/uv/", we assume it was installed via
-    # `uv tool install` and use `uv` to upgrade it.
+    # `uv tool install` and use `uv` to replace it.
     if "/uv/tools/" in sys.executable:
-        cmd = ["uv", "tool", "install", "-U", PYPI_PACKAGE_NAME]
+        cmd = ["uv", "tool", "install", "--force", wheel_url]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", "-U", PYPI_PACKAGE_NAME]
+        cmd = [sys.executable, "-m", "pip", "install", "-U", wheel_url]
 
     typer.echo(f"[colab] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd)
