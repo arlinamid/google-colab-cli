@@ -59,7 +59,7 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
         "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
     )
     mock_runtime.execute_code.assert_any_call(
-        "print('hello')", output_hook=ANY, timeout=30.0
+        "print('hello')", output_hook=ANY, timeout=None
     )
 
 
@@ -83,7 +83,7 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     assert mock_session.last_execution[2] is not None
     mock_store.add.assert_called_with(mock_session)
     mock_runtime.execute_code.assert_any_call(
-        "print(42)", output_hook=ANY, timeout=30.0
+        "print(42)", output_hook=ANY, timeout=None
     )
 
 
@@ -109,7 +109,7 @@ def test_cli_exec_env_injects_prelude(
 
     assert result.exit_code == 0, result.output
     expected = "import os\nos.environ['HF_TOKEN'] = 'abc'\n" + code
-    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=None)
 
 
 def test_cli_exec_env_flags_accumulate_and_split_on_first_equals(
@@ -140,7 +140,7 @@ def test_cli_exec_env_flags_accumulate_and_split_on_first_equals(
         "os.environ['B64'] = 'a=b=c'\n"
         "print('ok')"
     )
-    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=None)
 
 
 def test_cli_exec_env_escapes_tricky_literals(
@@ -165,7 +165,7 @@ def test_cli_exec_env_escapes_tricky_literals(
 
     assert result.exit_code == 0, result.output
     expected = f"import os\nos.environ['TRICKY'] = {value!r}\nprint('ok')"
-    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=None)
 
 
 def test_cli_exec_malformed_env_errors_before_session_resolution(
@@ -322,7 +322,7 @@ def test_cli_exec_secret_reads_local_env_and_registers_redaction(
 
     assert result.exit_code == 0, result.output
     expected = "import os\nos.environ['HF_TOKEN'] = 'hf_very_secret'\n" + code
-    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=None)
     mock_common_state.history.add_redaction.assert_called_with("hf_very_secret")
     assert "hf_very_secret" not in result.output
 

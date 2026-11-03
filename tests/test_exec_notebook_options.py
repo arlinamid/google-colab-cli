@@ -191,3 +191,15 @@ def test_notebook_flags_need_a_notebook(tmp_path, mock_runtime_class, session, f
 
     assert result.exit_code == 2
     assert "only apply to .ipynb notebooks" in result.stderr
+
+
+def test_python_file_is_read_as_utf8(tmp_path, mock_runtime_class, session):
+    """On Windows a .py file was read in the ANSI code page, so `print("é →")`
+    reached the kernel as "Ă© â†’" (seen on a Hungarian system)."""
+    ran = _runtime_running(mock_runtime_class)
+    script = tmp_path / "job.py"
+    script.write_text('print("Telepítés kész →")\n', encoding="utf-8")
+    result = runner.invoke(app, ["exec", "-s", "s1", "-f", str(script)])
+
+    assert result.exit_code == 0, result.output
+    assert ran == ['print("Telepítés kész →")\n']

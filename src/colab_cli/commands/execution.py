@@ -24,7 +24,12 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
+from colab_cli.utils import (
+    handle_image,
+    is_terminal_error,
+    read_python_source,
+    render_display_data,
+)
 from colab_cli.console import connect_console
 from colab_cli.secrets import resolve_secrets
 from colab_cli.notebook import (
@@ -157,6 +162,24 @@ def display_output(out, output_image=None):
         pass
 
 
+def read_script(path: str) -> str:
+    """Reads a local Python script as Python would (coding cookie, else UTF-8).
+
+    Raises:
+      typer.Exit: If it does not decode (exit code 2), with a hint.
+    """
+    try:
+        return read_python_source(path)
+    except (UnicodeDecodeError, SyntaxError) as e:
+        typer.echo(
+            f"[colab] Cannot read '{path}': {e}. Save it as UTF-8, or declare "
+            "its encoding on the first or second line, e.g. "
+            "'# -*- coding: cp932 -*-'.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+
 def _load_code_blocks(file: Optional[str], cells_spec: Optional[str]):
     """Read what `colab exec` should run. Returns (notebook or None, blocks).
 
@@ -168,8 +191,8 @@ def _load_code_blocks(file: Optional[str], cells_spec: Optional[str]):
             typer.echo(f"[colab] File not found: '{file}'", err=True)
             raise typer.Exit(1)
         if not file.endswith(".ipynb"):
-            with open(file, "r") as f:
-                return None, [{"code": f.read(), "id": None, "label": file, "title": ""}]
+            code = read_script(file)
+            return None, [{"code": code, "id": None, "label": file, "title": ""}]
         typer.echo(f"[colab] Parsing notebook '{file}'...")
         try:
             with open(file, "r", encoding="utf-8") as f:
@@ -237,8 +260,14 @@ def exec_command(
     ] = None,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
-    ] = 30.0,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Interrupt the kernel and fail if the code runs longer than this "
+                "many seconds. Default: no limit."
+            ),
+        ),
+    ] = None,
     env: Annotated[
         Optional[List[str]],
         typer.Option(

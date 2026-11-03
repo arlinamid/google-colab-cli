@@ -194,7 +194,11 @@ def setup_logging(log_to_stderr: bool):
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(log_dir, "colab.log"))
+    # DEBUG logs carry kernel code and output verbatim; the default encoding
+    # is the Windows code page, which fails on most non-ASCII text.
+    file_handler = logging.FileHandler(
+        os.path.join(log_dir, "colab.log"), encoding="utf-8"
+    )
     file_handler.setFormatter(logging.Formatter(log_format))
     logger.addHandler(file_handler)
 

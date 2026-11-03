@@ -829,3 +829,18 @@ def test_main_explains_a_lost_connection(
     err = capsys.readouterr().err
     assert expected in err
     assert "Traceback" not in err
+
+
+def test_main_explains_a_timeout(mocker, capsys):
+    from colab_cli import cli
+
+    mocker.patch.object(
+        cli, "app",
+        side_effect=TimeoutError("Execution exceeded the 30 s timeout; the kernel was interrupted."),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "[colab] Execution exceeded the 30 s timeout" in err
+    assert "Traceback" not in err

@@ -17,11 +17,51 @@ import html2text
 import logging
 import sys
 import tempfile
+import tokenize
 
 from typing import Optional, Union
 
 from rich.markdown import Markdown
 from rich.text import Text
+
+
+def read_python_source(path: str) -> str:
+    """Reads a Python source file the way Python itself does.
+
+    Honors a PEP 263 coding cookie (``# -*- coding: cp932 -*-``) and a UTF-8
+    BOM, and otherwise assumes UTF-8 (PEP 3120). A plain ``open()`` would use
+    the Windows ANSI code page instead (cp1252, cp1250, cp932, ...), and fail
+    or garble any non-ASCII text for most non-English users.
+
+    Raises:
+      UnicodeDecodeError, SyntaxError: If the file does not decode with its
+        declared (or the default UTF-8) encoding.
+    """
+    with tokenize.open(path) as f:
+        return f.read()
+
+
+def utf8_text_stream(stream):
+    """Makes a redirected text stream read and write UTF-8; returns it.
+
+    When stdin/stdout/stderr is a pipe or a file, Python uses the locale
+    encoding, which on Windows is the ANSI code page: printing Japanese (or
+    any text outside it) then raised UnicodeEncodeError, and piped-in code
+    was decoded in the wrong charset. Python 3.15 makes UTF-8 the default
+    (PEP 686); until then, switch redirected streams to UTF-8, replacing
+    anything that does not decode instead of failing. A real console is left
+    alone: Python writes to it through the Unicode console API already.
+    """
+    if stream is None or not hasattr(stream, "reconfigure"):
+        return stream
+    try:
+        if stream.isatty():
+            return stream
+    except (OSError, ValueError):
+        return stream
+    if (stream.encoding or "").lower().replace("-", "") != "utf8":
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    return stream
 
 
 def get_status_code(e: Exception) -> Optional[int]:

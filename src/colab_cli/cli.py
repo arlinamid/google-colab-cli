@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import sys
 from typing import Optional
 
 import click
@@ -192,13 +193,28 @@ def _connection_lost_message(name: Optional[str]) -> str:
     )
 
 
+def configure_stdio() -> None:
+    """Use UTF-8 for redirected stdin/stdout/stderr (see utf8_text_stream)."""
+    from colab_cli.utils import utf8_text_stream
+
+    sys.stdin = utf8_text_stream(sys.stdin)
+    sys.stdout = utf8_text_stream(sys.stdout)
+    sys.stderr = utf8_text_stream(sys.stderr)
+
+
 def main():
     from colab_cli.runtime import SessionConnectionLost
 
+    configure_stdio()
     try:
         app()
     except SessionConnectionLost as e:
         typer.echo(_connection_lost_message(e.session_name), err=True)
+        raise SystemExit(1)
+    except TimeoutError as e:
+        # Raised by ColabRuntime when --timeout passes (the kernel has been
+        # interrupted), or by a network call that gave up.
+        typer.echo(f"[colab] {e or 'Timed out.'}", err=True)
         raise SystemExit(1)
 
 
