@@ -14,6 +14,7 @@ below corresponds to a tag of the same name.
 
 - **update:** on Windows, a CLI installed with `uv tool install` is now recognized, so the upgrade hint suggests `uv tool install --force <wheel>` instead of `pip`.
 - **release:** the release workflow no longer shows as failed when GitHub cannot provide a macOS runner; macOS is tested by CI on every push to main.
+- **ci:** macOS jobs run on `macos-15-intel` instead of `macos-latest` (macOS 26 arm64), whose runners often were not available, so macOS checks no longer stay pending or get cancelled.
 
 ## [0.7.5.1] - 2026-11-03
 
