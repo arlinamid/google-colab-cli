@@ -32,6 +32,7 @@ from colab_cli.commands import (
     hf,
     run,
     secret,
+    share,
     ssh,
     utility,
     usage,
@@ -169,6 +170,7 @@ git.register(app)
 hf.register(app)
 run.register(app)
 secret.register(app)
+share.register(app)
 ssh.register(app)
 utility.register(app)
 usage.register(app)
