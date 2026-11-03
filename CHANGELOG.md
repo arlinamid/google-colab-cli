@@ -10,6 +10,10 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-03
+
+First release of the hybrid edition: Google's Colab CLI with Windows fixes and extra features on top.
+
 ### Changed
 
 - **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh`, `cmd` for `colab ssh -- CMD`, and `proxy` otherwise.
@@ -31,6 +35,12 @@ below corresponds to a tag of the same name.
 ### Fixed
 
 - **ssh:** `colab --config FILE ssh` and `colab --auth adc ssh` now keep those options in the ProxyCommand that `colab ssh` starts, so it uses the same sessions file and auth provider instead of the defaults.
+- **windows:** `colab console` works in PowerShell and cmd.exe (raw keys, ANSI color), and `colab drivemount` shows the consent link and waits for Enter on the console.
+- **windows:** `colab edit` no longer fails with `PermissionError` on its temporary file, and Windows `$EDITOR` paths (backslashes, `.cmd` launchers) work.
+- **console:** piped `colab console` no longer cuts off its output on a fresh runtime or leaks terminal replies into the next prompt.
+- **exec:** `colab exec` exits 1 when the code or a notebook cell raises; `--cells`, `--stop-on-error`, `--check` and `--check-only` select and pre-check notebook cells.
+- **sessions:** a running command reports a stopped session in one line instead of a traceback, and no longer puts a stopped session back into `sessions.json`.
+- **ssh:** a `%` in a session name or identity path no longer breaks the ProxyCommand; a passphrase-protected `--identity` key asks for its passphrase instead of hanging.
 
 ## [0.7.1] - 2026-09-14
 
@@ -100,5 +110,6 @@ below corresponds to a tag of the same name.
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.5.11...v0.6.0
