@@ -155,6 +155,7 @@ def test_bad_depth_exits_2(runtime):
     assert result.exit_code == 2
 
 
-def test_clone_uses_a_long_timeout(runtime):
+def test_clone_has_no_time_limit(runtime):
+    """A large download or clone may take hours; None means no limit."""
     runner.invoke(app, ["clone", "-s", "s1", "a/b"])
-    assert runtime.execute_code.call_args.kwargs["timeout"] >= 600
+    assert runtime.execute_code.call_args.kwargs["timeout"] is None

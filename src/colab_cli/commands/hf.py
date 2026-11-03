@@ -33,8 +33,6 @@ hf_app = typer.Typer(
 )
 
 _REPO_TYPES = ("model", "dataset", "space")
-# Downloads outlast the kernel client's short default request timeout.
-_DOWNLOAD_TIMEOUT_SEC = 3600
 # Tried in order when --token is not given.
 _DEFAULT_TOKEN_SOURCES = ["env:HF_TOKEN", "hf-cli", "prompt"]
 _IMPORT_HUB = (
@@ -138,7 +136,7 @@ def download(
     )
     typer.echo(f"[colab] Downloading {repo_id} on {name}...")
     exit_if_failed(
-        run_automation(name, "hf-download", code, timeout=_DOWNLOAD_TIMEOUT_SEC)
+        run_automation(name, "hf-download", code)
     )
 
 

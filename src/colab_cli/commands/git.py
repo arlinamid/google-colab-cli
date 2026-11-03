@@ -29,8 +29,6 @@ _SHORTHAND = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _GITHUB_HOST = "github.com"
 # Used when --token is not given; only ever sent to github.com.
 _AUTO_TOKEN_SOURCES = ["env:GH_TOKEN", "env:GITHUB_TOKEN", "gh-cli"]
-# Large repositories outlast the kernel client's short default timeout.
-_CLONE_TIMEOUT_SEC = 3600
 
 
 def _fail(message: str) -> None:
@@ -155,7 +153,7 @@ def clone(
         f"print('Cloned into', {dest!r})\n"
     )
     typer.echo(f"[colab] Cloning {url} on {name}...")
-    exit_if_failed(run_automation(name, "clone", code, timeout=_CLONE_TIMEOUT_SEC))
+    exit_if_failed(run_automation(name, "clone", code))
 
 
 def register(app: typer.Typer):

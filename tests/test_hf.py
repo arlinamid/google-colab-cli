@@ -130,6 +130,7 @@ def test_missing_huggingface_hub_is_explained(runtime):
     assert "colab install huggingface_hub" in code_holder["code"]
 
 
-def test_download_uses_a_long_timeout(runtime):
+def test_download_has_no_time_limit(runtime):
+    """A large download or clone may take hours; None means no limit."""
     runner.invoke(app, ["hf", "download", "-s", "s1", "x/y"])
-    assert runtime.execute_code.call_args.kwargs["timeout"] >= 600
+    assert runtime.execute_code.call_args.kwargs["timeout"] is None

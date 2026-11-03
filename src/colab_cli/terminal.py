@@ -160,6 +160,9 @@ def read_windows_key() -> str:
     return translate_windows_key(first)
 
 
+PROMPT_FROM_STDIN_ENV = "COLAB_CLI_PROMPT_FROM_STDIN"
+
+
 def read_controlling_line(prompt: str = "") -> str:
     """Read one line from the controlling terminal, not from a redirected pipe.
 
@@ -167,10 +170,16 @@ def read_controlling_line(prompt: str = "") -> str:
     even when stdin is redirected (the same reason the POSIX path avoids
     stdin). Falls back to ``sys.stdin`` and then ``input()`` when neither
     device exists, which is the case under CI and some IDE consoles.
+
+    A program that drives the CLI as a subprocess (a TUI that owns the
+    terminal, for example) can set ``COLAB_CLI_PROMPT_FROM_STDIN=1`` to have
+    the answer read from stdin instead of the controlling terminal.
     """
     if prompt:
         sys.stdout.write(prompt)
         sys.stdout.flush()
+    if os.environ.get(PROMPT_FROM_STDIN_ENV):
+        return sys.stdin.readline()
     if is_windows():
         try:
             with open("CONIN$", "r", encoding="utf-8", errors="replace") as con:

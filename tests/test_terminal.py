@@ -175,6 +175,18 @@ def test_read_controlling_line_falls_back_to_stdin(mocker):
     assert read_controlling_line() == "ok\n"
 
 
+@pytest.mark.parametrize("windows", [True, False])
+def test_read_controlling_line_from_stdin_when_asked(mocker, monkeypatch, windows):
+    """A program driving the CLI as a subprocess answers on stdin; the
+    controlling terminal (CONIN$ or /dev/tty) must not be opened."""
+    monkeypatch.setenv("COLAB_CLI_PROMPT_FROM_STDIN", "1")
+    mocker.patch("colab_cli.terminal.is_windows", return_value=windows)
+    opened = mocker.patch("builtins.open")
+    mocker.patch("sys.stdin.readline", return_value="\n")
+    assert read_controlling_line("Press Enter... ") == "\n"
+    opened.assert_not_called()
+
+
 def test_open_url_windows_uses_startfile(mocker):
     mocker.patch("colab_cli.terminal.is_windows", return_value=True)
     startfile = mocker.Mock()

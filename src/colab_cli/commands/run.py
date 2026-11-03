@@ -50,6 +50,7 @@ from colab_cli.commands.execution import (
     SECRET_HELP,
     _build_env_prelude,
     _parse_env_vars,
+    read_script,
 )
 from colab_cli.secrets import resolve_secrets
 from colab_cli.commands.session import resolve_runtime_options
@@ -76,8 +77,7 @@ def _build_script_payload(
     traceback line numbers from user code remain close to the original.
     """
     basename = os.path.basename(script_path)
-    with open(script_path, "r", encoding="utf-8") as f:
-        body = f.read()
+    body = read_script(script_path)
 
     # `repr()` produces a safe, round-trippable Python literal for arbitrary
     # strings (handles quotes, backslashes, non-ASCII).
@@ -263,8 +263,14 @@ def run_command(
     ] = False,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
-    ] = 30.0,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Interrupt the kernel and fail if the code runs longer than this "
+                "many seconds. Default: no limit."
+            ),
+        ),
+    ] = None,
     env: Annotated[
         Optional[List[str]],
         typer.Option(
@@ -301,6 +307,8 @@ def run_command(
     if not os.path.isfile(script):
         typer.echo(f"[colab] Script not found: {script}", err=True)
         raise typer.Exit(2)
+    # An undecodable script must fail before a VM is allocated.
+    read_script(script)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
     variant, accelerator, shape = resolve_runtime_options(
