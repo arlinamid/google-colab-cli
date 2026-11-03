@@ -28,7 +28,11 @@ from colab_cli.commands import (
     execution,
     files,
     automation,
+    git,
+    hf,
     run,
+    secret,
+    share,
     ssh,
     utility,
     usage,
@@ -112,6 +116,8 @@ def callback(
     #     pipelines.
     #   - `whoami`: developer-only debugging tool; banner would obscure the
     #     auth/scope info the user invoked it to see.
+    #   - `ssh` when stdout is not a terminal: piped `-- CMD` output and the
+    #     ProxyCommand's ssh byte stream must stay byte-exact.
     _AUTO_UPDATE_SUPPRESSED = {
         "update",
         "version",
@@ -125,7 +131,9 @@ def callback(
         "skill",
         "SKILL",
     }
-    if ctx.invoked_subcommand not in _AUTO_UPDATE_SUPPRESSED:
+    subcommand = ctx.invoked_subcommand
+    piped_ssh = subcommand == "ssh" and not execution.is_stdout_tty()
+    if subcommand not in _AUTO_UPDATE_SUPPRESSED and not piped_ssh:
         auto_update.run_background_check()
 
 
@@ -158,14 +166,40 @@ session.register(app)
 execution.register(app)
 files.register(app)
 automation.register(app)
+git.register(app)
+hf.register(app)
 run.register(app)
+secret.register(app)
+share.register(app)
 ssh.register(app)
 utility.register(app)
 usage.register(app)
 
 
+def _connection_lost_message(name: Optional[str]) -> str:
+    """Explain a dropped kernel connection in one line, not a traceback."""
+    from colab_cli.common import state
+
+    try:
+        still_recorded = name is not None and state.store.get(name) is not None
+    except Exception:
+        still_recorded = True
+    if not still_recorded:
+        return f"[colab] Session '{name}' was stopped, so the running command ended."
+    return (
+        f"[colab] Lost the connection to session '{name}'. The runtime may have "
+        f"been stopped or disconnected; check it with `colab status -s {name}`."
+    )
+
+
 def main():
-    app()
+    from colab_cli.runtime import SessionConnectionLost
+
+    try:
+        app()
+    except SessionConnectionLost as e:
+        typer.echo(_connection_lost_message(e.session_name), err=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

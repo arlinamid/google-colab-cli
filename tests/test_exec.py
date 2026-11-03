@@ -235,7 +235,8 @@ def test_cli_exec_outputs(
     mock_runtime.execute_code.side_effect = mock_execute_code
 
     result = runner.invoke(app, ["exec", "-s", "s1"], input="do_stuff()")
-    assert result.exit_code == 0
+    # The code raised an error, so exec reports failure (it used to exit 0).
+    assert result.exit_code == 1
 
     mock_handle_image.assert_any_call("png_data", "image/png", target_path=None)
     mock_handle_image.assert_any_call("jpeg_data", "image/jpeg", target_path=None)
@@ -299,3 +300,47 @@ def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp
     mock_runtime.execute_code.assert_any_call(
         "print('hello')", output_hook=ANY, timeout=3600.0
     )
+
+
+def test_cli_exec_secret_reads_local_env_and_registers_redaction(
+    mock_store, mock_runtime_class, mock_common_state, monkeypatch
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+    monkeypatch.setenv("LOCAL_HF", "hf_very_secret")
+
+    code = "print(1)"
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--secret", "HF_TOKEN=env:LOCAL_HF"], input=code
+    )
+
+    assert result.exit_code == 0, result.output
+    expected = "import os\nos.environ['HF_TOKEN'] = 'hf_very_secret'\n" + code
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+    mock_common_state.history.add_redaction.assert_called_with("hf_very_secret")
+    assert "hf_very_secret" not in result.output
+
+
+def test_cli_exec_secret_literal_is_refused(mock_store, mock_runtime_class):
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--secret", "HF_TOKEN=hf_literal"], input="x"
+    )
+    assert result.exit_code == 2
+    mock_runtime_class.return_value.execute_code.assert_not_called()
+
+
+def test_cli_exec_check_only_does_not_resolve_secrets(tmp_path, mocker):
+    read = mocker.patch("colab_cli.secrets.read_source")
+    f = tmp_path / "a.py"
+    f.write_text("print(1)\n")
+    result = runner.invoke(
+        app, ["exec", "-f", str(f), "--check-only", "--secret", "HF_TOKEN=prompt"]
+    )
+    assert result.exit_code == 0, result.output
+    read.assert_not_called()

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -45,6 +46,14 @@ def mock_store(mock_common_state):
 @pytest.fixture
 def mock_history(mock_common_state):
     return mock_common_state.history
+
+
+@pytest.fixture(autouse=True)
+def _no_user_editor(monkeypatch):
+    """`colab edit` honors $VISUAL/$EDITOR directly on Windows. Keep the
+    developer's own editor setting from launching a real editor in tests."""
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
 
 
 def test_cli_new_tpu(mock_client, mock_store):
@@ -397,9 +406,13 @@ def _extract_command_names(help_output: str) -> list[str]:
                 break
             # Lines look like:  "│ help        Show help for a command. │"
             # Strip the rich box characters.
-            inner = stripped.strip("│").strip()
-            if not inner:
+            inner = stripped.strip("│")
+            # A wrapped description continues on a line whose command column
+            # is blank. Rich renders one column narrower on Windows, so this
+            # happens there at the default width.
+            if not inner.strip() or not inner[:2].strip():
                 continue
+            inner = inner.strip()
             tok = inner.split()[0]
             names.append(tok)
     return names
@@ -568,6 +581,134 @@ def test_cli_edit_with_changes(
     assert "Edited and uploaded 'remote.txt'" in result.output
 
 
+@patch("colab_cli.commands.files.ContentsClient")
+@patch("click.edit")
+def test_cli_edit_round_trips_downloaded_content(
+    mock_edit, mock_contents_class, mock_store, mock_common_state
+):
+    """The download, the editor and the upload must all be able to open the
+    local file. With an open NamedTemporaryFile this fails on Windows, and the
+    swallowed download error left the editor with an empty file."""
+    mock_common_state.resolve_session.return_value = "s1"
+    contents = mock_contents_class.return_value
+
+    def fake_download(remote, local):
+        with open(local, "w") as f:
+            f.write("remote content\n")
+
+    contents.download.side_effect = fake_download
+
+    seen = {}
+
+    def fake_editor(filename, **kwargs):
+        seen["path"] = filename
+        with open(filename) as f:
+            seen["content"] = f.read()
+        with open(filename, "a") as f:
+            f.write("edited\n")
+
+    mock_edit.side_effect = fake_editor
+
+    uploaded = {}
+
+    def fake_upload(local, remote):
+        with open(local) as f:
+            uploaded[remote] = f.read()
+
+    contents.upload.side_effect = fake_upload
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "/content/dir/remote.py"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["content"] == "remote content\n"
+    assert os.path.basename(seen["path"]) == "remote.py"
+    assert uploaded == {"/content/dir/remote.py": "remote content\nedited\n"}
+    assert not os.path.exists(seen["path"])
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+@patch("click.edit")
+def test_cli_edit_missing_remote_file_starts_empty(
+    mock_edit, mock_contents_class, mock_store, mock_common_state
+):
+    mock_common_state.resolve_session.return_value = "s1"
+    contents = mock_contents_class.return_value
+    contents.download.side_effect = Exception("404")
+
+    seen = {}
+
+    def fake_editor(filename, **kwargs):
+        seen["exists"] = os.path.exists(filename)
+        with open(filename, "a") as f:
+            f.write("brand new\n")
+
+    mock_edit.side_effect = fake_editor
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "new.txt"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["exists"] is True
+    contents.upload.assert_called_once()
+    assert "Edited and uploaded 'new.txt'" in result.output
+
+
+def test_launch_editor_windows_keeps_backslashes(mocker, monkeypatch):
+    """On Windows $EDITOR is split with the Windows rules and started
+    directly, so a backslash path survives (pallets/click#3840)."""
+    from colab_cli.commands import files
+
+    monkeypatch.setenv("EDITOR", r"C:\tools\edit.exe --wait")
+    mocker.patch.object(files, "is_windows", return_value=True)
+    mocker.patch.object(
+        files,
+        "split_windows_command_line",
+        return_value=[r"C:\tools\edit.exe", "--wait"],
+    )
+    mocker.patch.object(files.shutil, "which", return_value=None)
+    call = mocker.patch.object(files.subprocess, "call", return_value=0)
+    click_edit = mocker.patch("click.edit")
+
+    files._launch_editor(r"C:\tmp\colab-edit-x\a.py")
+
+    call.assert_called_once_with(
+        [r"C:\tools\edit.exe", "--wait", r"C:\tmp\colab-edit-x\a.py"]
+    )
+    click_edit.assert_not_called()
+
+
+def test_launch_editor_windows_nonzero_exit_fails(mocker, monkeypatch):
+    import click
+    from colab_cli.commands import files
+
+    monkeypatch.setenv("VISUAL", "ed")
+    mocker.patch.object(files, "is_windows", return_value=True)
+    mocker.patch.object(files, "split_windows_command_line", return_value=["ed"])
+    mocker.patch.object(files.shutil, "which", return_value=r"C:\bin\ed.cmd")
+    call = mocker.patch.object(files.subprocess, "call", return_value=3)
+
+    with pytest.raises(click.ClickException):
+        files._launch_editor("f.txt")
+    call.assert_called_once_with([r"C:\bin\ed.cmd", "f.txt"])
+
+
+@pytest.mark.parametrize("windows, editor", [(False, "vim"), (True, None)])
+def test_launch_editor_otherwise_uses_click(mocker, monkeypatch, windows, editor):
+    """POSIX, and Windows without $VISUAL/$EDITOR (click's own default),
+    keep going through click.edit."""
+    from colab_cli.commands import files
+
+    if editor:
+        monkeypatch.setenv("EDITOR", editor)
+    mocker.patch.object(files, "is_windows", return_value=windows)
+    call = mocker.patch.object(files.subprocess, "call")
+    click_edit = mocker.patch("click.edit")
+
+    files._launch_editor("f.txt")
+
+    click_edit.assert_called_once_with(filename="f.txt")
+    call.assert_not_called()
+
+
 def _make_400_error(message="Bad Request"):
     """Build a ColabRequestError shaped like a 400 from the assign endpoint."""
     response = MagicMock()
@@ -657,3 +798,34 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
     assert result.exit_code != 0
     assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "still_recorded, expected",
+    [
+        (False, "Session 'qwen21' was stopped, so the running command ended."),
+        (True, "check it with `colab status -s qwen21`"),
+    ],
+    ids=["stopped", "disconnected"],
+)
+def test_main_explains_a_lost_connection(
+    mocker, capsys, mock_common_state, still_recorded, expected
+):
+    """`colab stop` from another terminal used to end a running `colab exec`
+    with a jupyter_kernel_client traceback. main() turns it into one line
+    and exit code 1."""
+    from colab_cli import cli
+    from colab_cli.runtime import SessionConnectionLost
+
+    mocker.patch.object(cli, "app", side_effect=SessionConnectionLost("qwen21"))
+    mock_common_state.store.get.return_value = (
+        MagicMock() if still_recorded else None
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert expected in err
+    assert "Traceback" not in err

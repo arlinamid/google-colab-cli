@@ -22,6 +22,8 @@ Modes:
 * ``colab ssh -s SESSION``         same, targeting SESSION explicitly.
 * ``colab ssh --proxy-mode -s S``  act as an OpenSSH ProxyCommand-compatible
                                    WebSocket-stdio bridge for ``~/.ssh/config``.
+* ``colab ssh [-s S] -- CMD``      run CMD in ``/content`` on an existing
+                                   session and exit with its status.
 
 Every ``colab ssh`` flag also works in ``--proxy-mode``: with ``-s NAME`` the
 session is created if it does not exist (so a config host works on first
@@ -35,18 +37,24 @@ the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
 """
 
 import contextlib
+import getpass
+import json
 import os
 from pathlib import Path
+import shlex
 import signal
 import subprocess
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Sequence
 from urllib.parse import urlparse
 import uuid
 
+from colab_cli.auth import AuthProvider
+from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
+from colab_cli.commands import execution
+from colab_cli.keepalive import wait_with_keep_alive
 from colab_cli.state import SessionState
-from colab_cli.terminal import join_argv
 import typer
 from typing_extensions import Annotated
 import websocket
@@ -58,6 +66,76 @@ _PUBKEY_HEADER = "X-Colab-Ssh-Pubkey"
 _SSH_HOST = "root@colab-runtime"
 # Colab's standard working directory; land here instead of root's home.
 _DEFAULT_REMOTE_DIR = "/content"
+_DEFAULT_SSH_MODE = "proxy"
+_CMD_SSH_MODE = "cmd"
+_SSH_MODES = ("interactive", _DEFAULT_SSH_MODE, _CMD_SSH_MODE)
+_MAX_SSH_SESSIONS = 5
+
+
+def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProcess:
+    """Runs ``ssh-keygen -y`` to print the public key of ``identity``.
+
+    ``-P`` supplies the passphrase so ssh-keygen never reads stdin. Under
+    ProxyCommand stdin is the open ssh pipe, so a prompt there would block
+    forever; DEVNULL and the timeout are a second guard.
+
+    Raises:
+      subprocess.CalledProcessError: If ssh-keygen exits non-zero (for example
+        a wrong or missing passphrase on an encrypted key).
+      subprocess.TimeoutExpired: If ssh-keygen does not finish in time.
+      FileNotFoundError: If ssh-keygen is not installed.
+    """
+    return subprocess.run(
+        ["ssh-keygen", "-y", "-f", identity, "-P", passphrase],
+        check=True,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=20,
+    )
+
+
+def _derive_with_passphrase_prompt(identity: str) -> subprocess.CompletedProcess:
+    """Asks for the passphrase on the terminal and derives the public key.
+
+    getpass reads the controlling terminal (the console on Windows, /dev/tty on
+    POSIX), so the prompt works even though stdin is the ssh pipe.
+
+    Returns:
+      The completed ``ssh-keygen`` run.
+
+    Raises:
+      typer.Exit: If there is no terminal to ask on, or the passphrase is wrong
+        (exit code 2).
+    """
+    try:
+        passphrase = getpass.getpass(
+            f"[colab] Passphrase for {identity}: ", stream=sys.stderr
+        )
+    except (EOFError, OSError):
+        typer.echo(
+            f"[colab] {identity} is passphrase-protected and no terminal is "
+            "available to ask for it. Run `colab ssh` from a terminal, or use "
+            "a key without a passphrase.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    try:
+        return _run_ssh_keygen(identity, passphrase)
+    except subprocess.CalledProcessError:
+        typer.echo(f"[colab] wrong passphrase for {identity}.", err=True)
+        raise typer.Exit(code=2)
+    except subprocess.TimeoutExpired:
+        typer.echo(
+            f"[colab] ssh-keygen did not finish for {identity}.", err=True
+        )
+        raise typer.Exit(code=2)
+    except FileNotFoundError as e:
+        typer.echo(
+            f"[colab] failed to derive public key from {identity}: {e}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
 
 def _pubkey_from_identity(identity: str) -> str:
@@ -78,13 +156,23 @@ def _pubkey_from_identity(identity: str) -> str:
         typer.echo(f"[colab] --identity {identity}: file not found.", err=True)
         raise typer.Exit(code=2)
     try:
-        res = subprocess.run(
-            ["ssh-keygen", "-y", "-f", identity],
-            check=True,
-            capture_output=True,
-            text=True,
+        res = _run_ssh_keygen(identity, passphrase="")
+    except subprocess.TimeoutExpired:
+        typer.echo(
+            f"[colab] ssh-keygen did not finish for {identity}; the key may be "
+            "passphrase-protected. Use a key without a passphrase.",
+            err=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise typer.Exit(code=2)
+    except subprocess.CalledProcessError as e:
+        if "passphrase" not in (e.stderr or "").lower():
+            typer.echo(
+                f"[colab] failed to derive public key from {identity}: {e}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        res = _derive_with_passphrase_prompt(identity)
+    except FileNotFoundError as e:
         typer.echo(
             f"[colab] failed to derive public key from {identity}: {e}",
             err=True,
@@ -92,7 +180,9 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
+        typer.echo(
+            f"[colab] ssh-keygen produced no key for {identity}.", err=True
+        )
         raise typer.Exit(code=2)
     return pubkey
 
@@ -212,14 +302,45 @@ def _stop_session(name: str) -> None:
         typer.echo(f"[colab] --rm: failed to stop '{name}': {e}", err=True)
 
 
-def _build_ws_url(session: SessionState) -> str:
+def _build_ws_url(session: SessionState, mode: str = _DEFAULT_SSH_MODE) -> str:
     """Builds the WebSocket URL for the session's SSH endpoint."""
+    if mode not in _SSH_MODES:
+        mode = _DEFAULT_SSH_MODE
     parsed = urlparse(session.url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     return (
         f"{scheme}://{parsed.netloc}{_SSH_PATH}"
         f"?colab-runtime-proxy-token={session.token}"
+        f"&colab-client-agent={COLAB_CLIENT_AGENT_HEADER['value']}"
+        f"&colab-client-agent=ssh-mode-{mode}"
     )
+
+
+def _session_limit(body: bytes) -> Optional[int]:
+    """Returns the session limit from a 429 body, or None if there is none.
+
+    Args:
+      body: The raw HTTP 429 response body.
+
+    Returns:
+      The limit when the body is the server's ``already-active-session``
+      error with an integer limit from 1 to ``_MAX_SSH_SESSIONS``; otherwise
+      None.
+    """
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("error") != "already-active-session":
+        return None
+    limit = data.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return None
+    if not 1 <= limit <= _MAX_SSH_SESSIONS:
+        return None
+    return limit
 
 
 def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
@@ -228,7 +349,7 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
     Args:
       status: The HTTP status of the failed upgrade, or None if there was no
         HTTP status (e.g. a network error).
-      body: The raw response body, used to refine the 400 message.
+      body: The raw response body, used to refine the 400 and 429 messages.
 
     Returns:
       A human-readable, actionable error message.
@@ -271,6 +392,13 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
                 "so an older or non-SSH runtime will not have it - run "
                 "`colab new` for a fresh runtime with SSH."
             )
+        case 429 if (limit := _session_limit(body)) is not None:
+            message = (
+                f"SSH session limit reached (HTTP 429): {limit} of {limit} "
+                "SSH sessions in use on this runtime. Close another "
+                "`colab ssh` or IDE connection to it and retry. The limit "
+                "depends on your Colab plan."
+            )
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "
@@ -307,8 +435,10 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
         printing an actionable message.
     """
     ws = websocket.WebSocket()
+    agent = COLAB_CLIENT_AGENT_HEADER
+    header = [f"{_PUBKEY_HEADER}: {pubkey}", f"{agent['key']}: {agent['value']}"]
     try:
-        ws.connect(url, header=[f"{_PUBKEY_HEADER}: {pubkey}"])
+        ws.connect(url, header=header)
         return ws
     except websocket.WebSocketBadStatusException as e:
         status = getattr(e, "status_code", None)
@@ -343,33 +473,6 @@ def _close_quietly(ws: websocket.WebSocket) -> None:
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
 
 
-def _pump_stdin_to_ws(ws: websocket.WebSocket, read=os.read, fileno=None) -> None:
-    """Copy stdin bytes onto the WebSocket until EOF.
-
-    A blocking ``os.read`` is equivalent to ``select`` on a single fd with no
-    timeout, and it works on Windows. ``select.select`` only accepts sockets
-    there, so calling it on the stdin handle raises ``OSError`` and the pump
-    thread dies immediately — ``colab ssh --proxy-mode`` then accepts output
-    but never forwards keystrokes (upstream issues #85 / #100, PR #158).
-
-    Args:
-      ws: The connected WebSocket to write binary frames to.
-      read: Byte reader, injectable in tests. Defaults to ``os.read``.
-      fileno: Stdin fd. Defaults to ``sys.stdin.buffer.fileno()``.
-    """
-    stdin_fd = sys.stdin.buffer.fileno() if fileno is None else fileno
-    try:
-        while True:
-            data = read(stdin_fd, 8192)
-            if not data:
-                break
-            ws.send_binary(data)
-    except (OSError, websocket.WebSocketException):
-        pass
-    finally:
-        _close_quietly(ws)
-
-
 def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     """Bridges the WebSocket <-> stdin/stdout as an OpenSSH ProxyCommand.
 
@@ -379,8 +482,21 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     Returns:
       0 when either side closes.
     """
+    stdin_fd = sys.stdin.buffer.fileno()
 
-    threading.Thread(target=_pump_stdin_to_ws, args=(ws,), daemon=True).start()
+    def stdin_to_ws():
+        try:
+            while True:
+                data = os.read(stdin_fd, 8192)
+                if not data:
+                    break
+                ws.send_binary(data)
+        except (OSError, websocket.WebSocketException):
+            pass
+        finally:
+            _close_quietly(ws)
+
+    threading.Thread(target=stdin_to_ws, daemon=True).start()
 
     try:
         while True:
@@ -400,30 +516,72 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     return 0
 
 
-def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
+def _proxy_command(session: SessionState, identity: Optional[str], mode: str) -> str:
     """Builds the OpenSSH ProxyCommand that bridges this session's WebSocket.
 
     Re-invoked by the interactive shell in ``--proxy-mode``. The session
-    already exists by then, so only ``-s NAME`` (plus identity) is needed.
+    already exists by then, so it passes ``-s NAME`` and the identity, and
+    keeps a non-default global ``--auth`` or ``--config`` because the child is
+    a fresh CLI.
     """
-    self_cmd = [
-        sys.executable,
-        "-m",
-        "colab_cli.cli",
-        "ssh",
-        "--proxy-mode",
-        "-s",
-        session.name,
-    ]
+    from colab_cli.common import state
+
+    argv = [sys.executable, "-m", "colab_cli.cli"]
+    if state.auth_provider is not AuthProvider.OAUTH2:
+        argv += ["--auth", state.auth_provider.value]
+    if state.config_path:
+        argv += ["--config", os.path.abspath(state.config_path)]
+    argv += ["ssh", "--proxy-mode", "-s", session.name]
     if identity:
-        self_cmd.extend(["--identity", identity])
-    # POSIX OpenSSH re-parses this with /bin/sh. Windows OpenSSH uses cmd.exe,
-    # which does not honor single quotes.
-    return join_argv(self_cmd)
+        argv += ["--identity", identity]
+    argv += ["--colab-internal-mode", mode]
+    if sys.platform == "win32":
+        command = subprocess.list2cmdline(argv)
+    else:
+        command = shlex.join(argv)
+    # OpenSSH expands %-tokens (%h, %p, ...) in ProxyCommand before running
+    # it, so a literal '%' in a session name or identity path must be '%%'.
+    return command.replace("%", "%%")
 
 
-def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
-    """Builds the shared ``ssh`` invocation (ProxyCommand + hardening)."""
+def _parse_forward(spec: str) -> str:
+    """Turns ``PORT``, ``LOCAL:REMOTE`` or ``LOCAL:HOST:REMOTE`` into an ``-L`` value.
+
+    The remote host defaults to ``localhost`` on the runtime.
+
+    Raises:
+      typer.Exit: On a malformed spec or a port outside 1-65535 (exit code 2).
+    """
+    parts = spec.split(":")
+    if len(parts) == 1:
+        parts = [parts[0], "localhost", parts[0]]
+    elif len(parts) == 2:
+        parts = [parts[0], "localhost", parts[1]]
+    if len(parts) != 3 or not parts[1]:
+        typer.echo(
+            f"[colab] Invalid forward {spec!r}. Use PORT, LOCAL:REMOTE or "
+            "LOCAL:HOST:REMOTE.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    for port in (parts[0], parts[2]):
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            typer.echo(
+                f"[colab] Invalid port in forward {spec!r}: expected 1-65535.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    return ":".join(parts)
+
+
+def _ssh_base_args(
+    proxy_command: str, identity: Optional[str], forwards: Sequence[str] = ()
+) -> list[str]:
+    """Builds the shared ``ssh`` invocation (ProxyCommand + hardening).
+
+    ``forwards`` are ready ``-L`` values; with any, ssh exits instead of
+    running without a forward that failed to bind (port already in use).
+    """
     args = [
         "ssh",
         "-o",
@@ -431,18 +589,60 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
-        # ``/dev/null`` on POSIX, ``nul`` on Windows. Windows OpenSSH rejects
-        # a POSIX null path for the known-hosts file.
         f"UserKnownHostsFile={os.devnull}",
         "-o",
         "LogLevel=ERROR",
     ]
     if identity:
         args.extend(["-i", os.path.expanduser(identity)])
+    if forwards:
+        args.extend(["-o", "ExitOnForwardFailure=yes"])
+        for fwd in forwards:
+            args.extend(["-L", fwd])
     return args
 
 
-def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
+def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
+    """Runs ssh and returns its exit code, pinging keep-alive while it runs.
+
+    The backend only counts kernel activity as use, so a forward alone would
+    let the runtime idle out; ``keep_alive`` pings from this process.
+    """
+    if not keep_alive:
+        return subprocess.call(args)
+    from colab_cli.common import state
+
+    proc = subprocess.Popen(args)
+    return wait_with_keep_alive(proc, state.client, session.endpoint)
+
+
+def _run_forward_only(
+    session: SessionState,
+    identity: Optional[str],
+    forwards: Sequence[str],
+    keep_alive: bool,
+) -> int:
+    """Holds the forwards open with ``ssh -N`` (no shell) until Ctrl+C."""
+    ssh_args = _ssh_base_args(
+        _proxy_command(session, identity, "interactive"), identity, forwards
+    )
+    ssh_args.extend(["-N", _SSH_HOST])
+    for fwd in forwards:
+        local, host, remote = fwd.split(":")
+        typer.echo(f"[colab] Forwarding http://localhost:{local} -> {host}:{remote} on '{session.name}'")
+    typer.echo(
+        "[colab] Press Ctrl+C to stop."
+        + (" The runtime is kept alive meanwhile." if keep_alive else "")
+    )
+    return _call_ssh(ssh_args, session, keep_alive)
+
+
+def _run_interactive_ssh(
+    session: SessionState,
+    identity: Optional[str],
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
+) -> int:
     """Spawns an interactive ``ssh`` that uses this CLI as its ProxyCommand.
 
     The subprocess connects to the abstract host ``colab-runtime``; its
@@ -461,13 +661,45 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
     Returns:
       The exit code of the ``ssh`` subprocess.
     """
-    ssh_args = _ssh_base_args(_proxy_command(session, identity), identity)
+    ssh_args = _ssh_base_args(
+        _proxy_command(session, identity, "interactive"), identity, forwards
+    )
     ssh_args.append("-t")
     ssh_args.append(_SSH_HOST)
     ssh_args.append(
         f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; exec ${{SHELL:-/bin/bash}} -l"
     )
-    return subprocess.call(ssh_args)
+    return _call_ssh(ssh_args, session, keep_alive)
+
+
+def _run_remote_command(
+    session: SessionState,
+    identity: Optional[str],
+    cmd: list[str],
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
+) -> int:
+    """Runs CMD in ``/content`` over ``ssh`` and returns ssh's exit code.
+
+    One argument is a shell command line, as with OpenSSH; several are an exact
+    argv. ``-t`` only when stdin and stdout are terminals, else ``-T``.
+
+    Args:
+      session: The session to connect to.
+      identity: Optional private key path forwarded to ``ssh``.
+      cmd: The command and its arguments.
+
+    Returns:
+      The exit code of the ``ssh`` subprocess.
+    """
+    proxy = _proxy_command(session, identity, _CMD_SSH_MODE)
+    ssh_args = _ssh_base_args(proxy, identity, forwards)
+    tty = execution.is_stdin_tty() and execution.is_stdout_tty()
+    ssh_args.append("-t" if tty else "-T")
+    ssh_args.append(_SSH_HOST)
+    line = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
+    ssh_args.append(f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; {line}")
+    return _call_ssh(ssh_args, session, keep_alive)
 
 
 def _select_proxy_session(
@@ -494,7 +726,9 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
+            return _auto_create_session(
+                gpu, tpu, name=session, high_mem=high_mem
+            ), True
     return _resolve_session(session), False
 
 
@@ -556,8 +790,6 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
         do_rm()
         os._exit(0)
 
-    # Windows has SIGINT and SIGTERM but not SIGHUP. Looking the name up
-    # with getattr avoids AttributeError while evaluating the signal list.
     for name in ("SIGHUP", "SIGTERM", "SIGINT"):
         sig = getattr(signal, name, None)
         if sig is None:
@@ -568,7 +800,9 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
             pass  # e.g. not running in the main thread
 
 
-def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int:
+def _run_proxy_bridge(
+    s: SessionState, identity: Optional[str], rm: bool, mode: str = _DEFAULT_SSH_MODE
+) -> int:
     """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
 
     Args:
@@ -576,6 +810,7 @@ def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int
       identity: Optional private key path for the pubkey header.
       rm: If True, stop the session when the bridge closes or a terminating
         signal arrives.
+      mode: The ssh mode to tag the WebSocket with.
 
     Returns:
       The bridge exit code.
@@ -595,7 +830,7 @@ def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int
         _install_rm_signal_handlers(_do_rm)
 
     pubkey = _resolve_pubkey(identity)
-    ws = _connect_websocket(_build_ws_url(s), pubkey)
+    ws = _connect_websocket(_build_ws_url(s, mode), pubkey)
     try:
         return _bridge_proxy_mode(ws)
     finally:
@@ -603,7 +838,12 @@ def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int
 
 
 def _run_interactive_shell(
-    s: SessionState, identity: Optional[str], created: bool, rm: bool
+    s: SessionState,
+    identity: Optional[str],
+    created: bool,
+    rm: bool,
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
 ) -> int:
     """Runs the interactive ssh shell, honoring ``--rm`` on exit.
 
@@ -623,7 +863,7 @@ def _run_interactive_shell(
             err=True,
         )
     try:
-        return _run_interactive_ssh(s, identity)
+        return _run_interactive_ssh(s, identity, forwards, keep_alive)
     finally:
         if created and rm:
             _stop_session(s.name)
@@ -700,6 +940,44 @@ def ssh(
             ),
         ),
     ] = False,
+    forward: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "-L",
+            "--forward",
+            help=(
+                "Forward a local port to the runtime: PORT, LOCAL:REMOTE or "
+                "LOCAL:HOST:REMOTE (host defaults to localhost on the "
+                "runtime). Repeat for several ports. The runtime is kept "
+                "alive while the forward is open."
+            ),
+        ),
+    ] = None,
+    no_shell: Annotated[
+        bool,
+        typer.Option(
+            "-N",
+            "--no-shell",
+            help="With -L: only hold the forwards open, no shell (Ctrl+C stops).",
+        ),
+    ] = False,
+    no_keep_alive: Annotated[
+        bool,
+        typer.Option(
+            "--no-keep-alive",
+            help="With -L: do not ping keep-alive; the runtime may idle out.",
+        ),
+    ] = False,
+    ssh_mode: Annotated[
+        str, typer.Option("--colab-internal-mode", hidden=True)
+    ] = _DEFAULT_SSH_MODE,
+    cmd: Annotated[
+        Optional[list[str]],
+        typer.Argument(
+            metavar="[-- CMD [ARGS]...]",
+            help="Command to run on an existing session instead of a shell.",
+        ),
+    ] = None,
 ):
     """Connect to a Colab runtime via SSH.
 
@@ -708,16 +986,87 @@ def ssh(
     --proxy-mode it is a ProxyCommand-compatible WebSocket-stdio bridge; every
     flag above still applies (``-s NAME`` creates the session if missing,
     ``--gpu/--tpu`` set its accelerator, ``--rm`` stops it on disconnect).
+    With ``-- CMD`` it runs CMD in ``/content`` on an existing session and
+    exits with its status, using a PTY only when stdin and stdout are terminals.
     """
+    if proxy_mode and cmd:
+        typer.echo("[colab] --proxy-mode takes no command.", err=True)
+        raise typer.Exit(code=2)
+    forwards = [_parse_forward(f) for f in forward or []]
+    keep_alive = bool(forwards) and not no_keep_alive
+    if no_shell and not forwards:
+        typer.echo("[colab] -N/--no-shell needs at least one -L forward.", err=True)
+        raise typer.Exit(code=2)
+    if proxy_mode and forwards:
+        typer.echo(
+            "[colab] -L ignored with --proxy-mode: set LocalForward in "
+            "~/.ssh/config instead.",
+            err=True,
+        )
+    if cmd:
+        with contextlib.redirect_stdout(sys.stderr):
+            s = _resolve_session(session)
+        _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
+        if rm:
+            typer.echo("[colab] --rm ignored with -- CMD.", err=True)
+        raise typer.Exit(
+            code=_run_remote_command(s, identity, cmd, forwards, keep_alive)
+        )
+    if proxy_mode and ssh_mode == _CMD_SSH_MODE:
+        with contextlib.redirect_stdout(sys.stderr):
+            s = _resolve_session(session)
+        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
-        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm))
+        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
-    raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
+    if no_shell:
+        raise typer.Exit(code=_run_forward_only(s, identity, forwards, keep_alive))
+    raise typer.Exit(
+        code=_run_interactive_shell(s, identity, created, rm, forwards, keep_alive)
+    )
+
+
+def forward(
+    ports: Annotated[
+        List[str],
+        typer.Argument(
+            metavar="PORT...",
+            help="PORT, LOCAL:REMOTE or LOCAL:HOST:REMOTE, as for `colab ssh -L`.",
+        ),
+    ],
+    session: Annotated[
+        Optional[str], typer.Option("-s", "--session", help="Session name")
+    ] = None,
+    identity: Annotated[
+        Optional[str],
+        typer.Option("--identity", "-i", help="SSH private key, as for `colab ssh`."),
+    ] = None,
+    no_keep_alive: Annotated[
+        bool,
+        typer.Option(
+            "--no-keep-alive",
+            help="Do not ping keep-alive; the runtime may idle out.",
+        ),
+    ] = False,
+):
+    """Forward local ports to a runtime over ssh until Ctrl+C.
+
+    Same as ``colab ssh -s S -N -L PORT...``: open a Gradio, Streamlit,
+    Jupyter or TensorBoard server on the runtime at http://localhost:PORT.
+    Only your machine can reach it. The runtime is kept alive meanwhile.
+    """
+    forwards = [_parse_forward(p) for p in ports]
+    s = _resolve_session(session)
+    raise typer.Exit(
+        code=_run_forward_only(s, identity, forwards, not no_keep_alive)
+    )
 
 
 def register(app: typer.Typer):
-    app.command()(ssh)
+    # Options after the first CMD word belong to CMD, not to `colab ssh`.
+    app.command(context_settings={"allow_interspersed_args": False})(ssh)
+    app.command()(forward)

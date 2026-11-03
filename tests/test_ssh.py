@@ -22,11 +22,14 @@ vs --proxy-mode).
 """
 
 import io
+import os
 import shlex
 import subprocess
 import sys
+import threading
 from unittest.mock import MagicMock
 
+from colab_cli.auth import AuthProvider
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
 import pytest
@@ -95,6 +98,76 @@ def test_resolve_pubkey_missing_identity_exits(tmp_path):
     assert exc_info.value.exit_code == 2
 
 
+def test_pubkey_derivation_never_reads_the_ssh_pipe(mocker, tmp_path):
+    """ssh-keygen must not inherit stdin, or a passphrase prompt blocks forever."""
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mock_run = mocker.patch(
+        "subprocess.run",
+        return_value=MagicMock(stdout="ssh-ed25519 AAAA fake\n", returncode=0),
+    )
+    ssh_module._resolve_pubkey(str(key))
+    _, kwargs = mock_run.call_args
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["timeout"] > 0
+
+
+def test_pubkey_derivation_timeout_exits_with_passphrase_hint(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch(
+        "subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["ssh-keygen"], 20),
+    )
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
+def _passphrase_error(cmd):
+    return subprocess.CalledProcessError(
+        1,
+        cmd,
+        stderr='Load key "x": incorrect passphrase supplied to decrypt private key',
+    )
+
+
+def test_pubkey_derivation_prompts_for_passphrase(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    fake_pub = "ssh-ed25519 AAAA fake"
+
+    def fake_run(cmd, **kwargs):
+        if "-P" in cmd and cmd[cmd.index("-P") + 1] == "secret":
+            return MagicMock(stdout=fake_pub + "\n", returncode=0)
+        raise _passphrase_error(cmd)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    getpass = mocker.patch("getpass.getpass", return_value="secret")
+    assert ssh_module._resolve_pubkey(str(key)) == fake_pub
+    getpass.assert_called_once()
+
+
+def test_pubkey_derivation_wrong_passphrase_exits_2(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch("subprocess.run", side_effect=_passphrase_error(["ssh-keygen"]))
+    mocker.patch("getpass.getpass", return_value="wrong")
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
+def test_pubkey_derivation_without_terminal_exits_2(mocker, tmp_path):
+    key = tmp_path / "id_test"
+    key.write_text("(fake private key)")
+    mocker.patch("subprocess.run", side_effect=_passphrase_error(["ssh-keygen"]))
+    mocker.patch("getpass.getpass", side_effect=EOFError)
+    with pytest.raises(typer.Exit) as exc_info:
+        ssh_module._resolve_pubkey(str(key))
+    assert exc_info.value.exit_code == 2
+
+
 @pytest.mark.parametrize(
     ("run_side_effect", "run_return"),
     [
@@ -143,7 +216,9 @@ def test_resolve_pubkey_default_scan_key_order(
     if present:
         content = f"ssh-key-content-for-{present}\n"
         (ssh_dir / present).write_text(content)
-    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setattr(
+        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
+    )
     if expect_found:
         assert ssh_module._resolve_pubkey(None) == content.strip()
     else:
@@ -173,6 +248,103 @@ def test_resolve_pubkey_default_scan_key_order(
 def test_explain_handshake_failure_mapping(status, body, must_contain):
     out = ssh_module._explain_handshake_failure(status, body)
     assert must_contain in out
+
+
+_FALLBACK_429 = (
+    "Already-active SSH session (HTTP 429): another `colab ssh` is "
+    "connected to this runtime. Disconnect it and retry."
+)
+_LIMIT_BODY_PREFIX = b'{"error":"already-active-session","limit":'
+_LIMIT_1_TEXT = (
+    "SSH session limit reached (HTTP 429): 1 of 1 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+_LIMIT_2_TEXT = (
+    "SSH session limit reached (HTTP 429): 2 of 2 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+_LIMIT_4_TEXT = (
+    "SSH session limit reached (HTTP 429): 4 of 4 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [
+        (1, _LIMIT_1_TEXT),
+        (2, _LIMIT_2_TEXT),
+        (4, _LIMIT_4_TEXT),
+    ],
+    ids=["limit-1", "limit-2", "limit-4"],
+)
+def test_explain_handshake_failure_session_limit(limit, expected):
+    body = b"%s%d}" % (_LIMIT_BODY_PREFIX, limit)
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == expected
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"error":"already-active-session"}',
+        _LIMIT_BODY_PREFIX + b"true}",
+        _LIMIT_BODY_PREFIX + b"false}",
+        _LIMIT_BODY_PREFIX + b"3.0}",
+        _LIMIT_BODY_PREFIX + b'"3"}',
+        _LIMIT_BODY_PREFIX + b"null}",
+        _LIMIT_BODY_PREFIX + b"0}",
+        _LIMIT_BODY_PREFIX + b"-1}",
+        _LIMIT_BODY_PREFIX + b"6}",
+        _LIMIT_BODY_PREFIX + b"9" * 5000 + b"}",
+        b"[" * 200_000,
+        b"<html><body>Too Many Requests</body></html>",
+        b"",
+        _LIMIT_BODY_PREFIX + b"\xff\xfe}",
+        b'[{"error":"already-active-session","limit":2}]',
+        b'{"limit":2}',
+        b'{"error":"rate-limited","limit":2}',
+    ],
+    ids=[
+        "no-limit",
+        "bool-true",
+        "bool-false",
+        "float",
+        "str",
+        "null",
+        "zero",
+        "negative",
+        "six",
+        "5000-digit",
+        "deep-nesting",
+        "html",
+        "empty",
+        "non-utf8",
+        "list",
+        "no-error",
+        "wrong-error",
+    ],
+)
+def test_explain_handshake_failure_429_without_usable_limit(body):
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _FALLBACK_429
+
+
+def test_explain_handshake_failure_session_limit_past_200_char_snippet():
+    pad = b"x" * 200
+    body = b'{"error":"already-active-session","pad":"%s","limit":2}' % pad
+    assert body.index(b'"limit"') > 200
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _LIMIT_2_TEXT
+
+
+def test_explain_handshake_failure_session_limit_invalid_utf8_elsewhere():
+    body = b'{"error":"already-active-session","pad":"\xff","limit":2}'
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _LIMIT_2_TEXT
 
 
 def test_explain_handshake_failure_decodes_str_body():
@@ -233,40 +405,47 @@ def test_bridge_proxy_mode_pumps_ws_to_stdout(mocker):
     ws.close.assert_called()
 
 
-def test_pump_stdin_uses_blocking_read_not_select():
-    """Windows ``select()`` cannot wait on a pipe. The ProxyCommand pump must
-    block in ``os.read`` instead, or stdin never reaches the runtime."""
-    import inspect
+def test_bridge_proxy_mode_pumps_stdin_to_ws(mocker):
+    """os.read() chunks leave as binary frames; EOF ends the pump and closes
+    the socket.
 
-    assert "select.select(" not in inspect.getsource(ssh_module._bridge_proxy_mode)
-    assert "select.select(" not in inspect.getsource(ssh_module._pump_stdin_to_ws)
+    Regression test: the pump used select() on the stdin fd before reading.
+    Windows select() only accepts sockets, so there the OSError killed the
+    pump thread and the remote side saw no input at all; a plain blocking
+    read works on every platform.
+    """
+    reads = iter([b"ping ", b"hello", b""])
+    stdin_eof = threading.Event()
+
+    def fake_read(fd, size):
+        chunk = next(reads)
+        if not chunk:
+            stdin_eof.set()
+        return chunk
+
+    mocker.patch("sys.stdin")
+    sys.stdin.buffer.fileno.return_value = 0
+    mocker.patch.object(ssh_module.os, "read", side_effect=fake_read)
+    fake_stdout = MagicMock()
+    fake_stdout.buffer = io.BytesIO()
+    mocker.patch("sys.stdout", fake_stdout)
+
+    # Hold the ws->stdout loop until the pump has drained stdin, so the
+    # send_binary assertions below can't race the reader thread.
+    def recv_data(control_frame):
+        stdin_eof.wait(timeout=5)
+        return (websocket.ABNF.OPCODE_CLOSE, b"")
 
     ws = MagicMock()
-    chunks = [b"hello", b""]
-    ssh_module._pump_stdin_to_ws(ws, read=lambda fd, n: chunks.pop(0), fileno=0)
-    ws.send_binary.assert_called_once_with(b"hello")
+    ws.recv_data.side_effect = recv_data
+
+    rc = ssh_module._bridge_proxy_mode(ws)
+    assert rc == 0
+    assert [call.args[0] for call in ws.send_binary.call_args_list] == [
+        b"ping ",
+        b"hello",
+    ]
     ws.close.assert_called()
-
-
-def test_proxy_command_windows_cmd_quoting(mocker):
-    """Windows OpenSSH parses ProxyCommand with cmd.exe."""
-    mocker.patch("colab_cli.terminal.is_windows", return_value=True)
-    cmd = ssh_module._proxy_command(_make_session(name="my session"), None)
-    assert '"my session"' in cmd
-    assert "'" not in cmd
-
-
-def test_install_rm_handlers_ignores_missing_sighup(mocker):
-    """Windows has no SIGHUP. Installing --rm handlers must not raise."""
-    import signal
-
-    mocker.patch("colab_cli.commands.ssh.signal.SIGHUP", None)
-    sigmock = mocker.patch("colab_cli.commands.ssh.signal.signal")
-    ssh_module._install_rm_signal_handlers(lambda: None)
-    registered = {call.args[0] for call in sigmock.call_args_list}
-    assert None not in registered
-    assert signal.SIGTERM in registered
-    assert signal.SIGINT in registered
 
 
 # --- ProxyCommand shell quoting ---------------------------------------------
@@ -296,14 +475,15 @@ def test_install_rm_handlers_ignores_missing_sighup(mocker):
 @pytest.mark.parametrize(
     "identity", [None, "/k/id ed25519"], ids=["no-identity", "identity-space"]
 )
-def test_proxy_command_round_trips_through_the_shell(name, identity):
+def test_proxy_command_round_trips_through_the_shell(name, identity, mocker):
     """The ProxyCommand string must re-parse into the exact argv.
 
     `ssh` hands the ProxyCommand to /bin/sh, so every argument has to survive
     word-splitting verbatim -- a hostile session name must arrive as one
     literal argument, never as a new word or a substitution.
     """
-    cmd = ssh_module._proxy_command(_make_session(name=name), identity)
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    cmd = ssh_module._proxy_command(_make_session(name=name), identity, "interactive")
     argv = shlex.split(cmd)
 
     assert argv[:7] == [
@@ -315,10 +495,11 @@ def test_proxy_command_round_trips_through_the_shell(name, identity):
         "-s",
         name,
     ]
+    mode_args = ["--colab-internal-mode", "interactive"]
     if identity:
-        assert argv[7:] == ["--identity", identity]
+        assert argv[7:] == ["--identity", identity, *mode_args]
     else:
-        assert len(argv) == 7
+        assert argv[7:] == mode_args
 
 
 # --- session resolution ------------------------------------------------------
@@ -377,14 +558,18 @@ def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker):
     connect = mocker.patch.object(
         ssh_module, "_connect_websocket", return_value=fake_ws
     )
-    bridge = mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
+    bridge = mocker.patch.object(
+        ssh_module, "_bridge_proxy_mode", return_value=0
+    )
     ssh_subprocess = mocker.patch.object(ssh_module, "_run_interactive_ssh")
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
     assert result.exit_code == 0
     connect.assert_called_once()
     args, _ = connect.call_args
-    assert args[0].startswith("wss://abc-foo.colab.googleusercontent.com/colab/ssh")
+    assert args[0].startswith(
+        "wss://abc-foo.colab.googleusercontent.com/colab/ssh"
+    )
     assert args[1] == fake_pub
     bridge.assert_called_once_with(fake_ws)
     ssh_subprocess.assert_not_called()
@@ -406,7 +591,7 @@ def test_ssh_interactive_mode_calls_ssh_subprocess(mock_common_state, mocker):
 
     result = runner.invoke(app, ["ssh", "-s", "s1"])
     assert result.exit_code == 0
-    interactive.assert_called_once_with(sess, None)
+    interactive.assert_called_once_with(sess, None, [], False)
     bridge.assert_not_called()
 
 
@@ -431,7 +616,9 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
         captured["url"] = url
         return MagicMock()
 
-    mocker.patch.object(ssh_module, "_connect_websocket", side_effect=fake_connect)
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", side_effect=fake_connect
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
@@ -458,7 +645,9 @@ def test_ssh_handshake_400_emits_actionable_message(
         ssh_module, "_resolve_pubkey", return_value="ssh-rsa AAAAfake u@h"
     )
 
-    err = websocket.WebSocketBadStatusException("Handshake status 400 Bad Request", 400)
+    err = websocket.WebSocketBadStatusException(
+        "Handshake status 400 Bad Request", 400
+    )
     err.status_code = 400
     err.resp_body = resp_body
     mocker.patch.object(websocket.WebSocket, "connect", side_effect=err)
@@ -468,3 +657,46 @@ def test_ssh_handshake_400_emits_actionable_message(
     assert result.exit_code == 1
     assert "unsupported key type" in result.stderr
     assert "ssh-keygen -t ed25519" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "code"), [(["--help"], 0), (["--ssh", "-s", "x"], 2), (["--high-men"], 2)]
+)
+def test_hidden_mode_option_stays_out_of_help_and_suggestions(argv, code):
+    result = runner.invoke(app, ["ssh", *argv])
+    assert result.exit_code == code
+    assert "ssh-mode" not in result.output
+    assert "--colab-internal-mode" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("auth", "config", "global_args"),
+    [
+        (AuthProvider.OAUTH2, "~/alt.json", ["--config"]),
+        (AuthProvider.ADC, "rel/s.json", ["--auth", "adc", "--config"]),
+    ],
+    ids=["tilde-config", "auth-and-config"],
+)
+def test_proxy_command_keeps_global_options(
+    mock_common_state, mocker, auth, config, global_args
+):
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    mock_common_state.auth_provider = auth
+    mock_common_state.config_path = config
+    session = _make_session(name="s")
+    argv = shlex.split(ssh_module._proxy_command(session, None, "interactive"))
+    if config:
+        global_args = [*global_args, os.path.abspath(config)]
+    assert argv == [
+        *[sys.executable, "-m", "colab_cli.cli", *global_args, "ssh"],
+        *["--proxy-mode", "-s", "s", "--colab-internal-mode", "interactive"],
+    ]
+
+
+def test_proxy_command_escapes_percent_for_openssh_tokens(mocker):
+    """OpenSSH expands %-tokens in ProxyCommand, so a literal '%' must be '%%'."""
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    cmd = ssh_module._proxy_command(_make_session(name="a%h"), None, "interactive")
+
+    assert "a%%h" in cmd
+    assert "a%h" not in cmd.replace("a%%h", "")

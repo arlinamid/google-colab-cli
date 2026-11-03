@@ -1,7 +1,7 @@
 ---
 log:
-2026-10-07: Drive mount fixes for upstream issues #113, #103, and #108. `drive.mount` is now called with `timeout_ms=600000` so the kernel's `blocking_request` does not give up at the 120s default while the user is still in the browser (that produced `ValueError: mount failed` with an empty reason). The propagation handshake runs on a daemon thread so it does not block the websocket recv loop. The consent URL is opened in the system browser when one is available (`os.startfile` on Windows, `open` on macOS, `xdg-open` elsewhere) and the prompt names the `login_hint` account. HTTP 400 is explained as a multi-account browser mismatch instead of dumping Google's HTML error page, and an error `colab_reply` unblocks the kernel immediately. Optional `--authuser N` rewrites the consent URL only when the user asks; the propagation request's `authuser` parameter was shown in #103 not to fix the 400 by itself, and the URL is not forced to `authuser=0`. The Enter prompt reads `/dev/tty` on POSIX and `CONIN$` on Windows.
-
+2026-11-03: Added section 11 (secrets, Hugging Face, clone, share, keepalive; details in 07_secrets_tunnels_integrations.md). `run_automation` now returns its outputs, can run in the session's own kernel (`session_kernel=True`), and `HistoryLogger.add_redaction` writes registered secret values as `***`.
+2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
 2026-06-11: Replaced the `oauth2` provider's `run_local_server()` (localhost redirect) with a remote copy-paste flow (`_run_remote_flow` in `auth.py`). The CLI now prints an authorization URL built with `redirect_uri=https://sdk.cloud.google.com/applicationdefaultauthcode.html` and `token_usage=remote`, then reads the pasted authorization code via `input()` and exchanges it with `flow.fetch_token(code=...)`. This is the same flow `gcloud auth application-default login` uses and works identically in local and remote/headless/container environments, removing the heuristic of whether to auto-open a browser. Confirmed server-side acceptance with a live GET-only check against the bundled cloud-SDK client (`764086051850-...`); the OOB redirect and a non-bundled client id were both verified to be rejected (`OOB flow has been blocked` / `redirect_uri_mismatch`). Unit tests in `tests/test_auth.py` assert no localhost server is started, the redirect URI + `token_usage=remote` are set, and the pasted code is exchanged.
@@ -34,7 +34,15 @@ backend, selected via the global `--auth=<provider>` flag:
     `token_usage=remote`) using the registered HTTPS landing page
     `https://sdk.cloud.google.com/applicationdefaultauthcode.html`; the user
     signs in, copies the code Google displays, and pastes it back at the
-    prompt. The refresh token is cached at `~/.config/colab-cli/token.json`.
+    prompt. The refresh token is cached in the OS native keyring via the
+    `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`),
+    falling back to running `_run_remote_flow` if the keyring is not accessible
+    or locked. Keyring read/write failures are printed to stderr, since a
+    failed write means the user is prompted again on every command. A token
+    left at the pre-keyring path `~/.config/colab-cli/token.json` is migrated
+    into the keyring on first use and the file is deleted once the keyring
+    write succeeds (it is kept if the write fails). If the keyring already
+    holds a token, the legacy file is deleted.
     This is the same mechanism `gcloud auth application-default login` uses,
     and it behaves identically on local, remote, headless, and container
     hosts (no auto-opened browser, no bound port). We deliberately do **not**
@@ -67,9 +75,9 @@ sufficient for this host.
 How each provider supplies the scope:
 
 -   **`oauth2`**: `PUBLIC_SCOPES` already includes `colaboratory`, so the
-    InstalledAppFlow consent screen lists it. Existing cached tokens at
-    `~/.config/colab-cli/token.json` that were minted before this change must
-    be deleted to trigger a fresh consent flow.
+    InstalledAppFlow consent screen lists it. Existing cached tokens in the
+    keyring that were minted before a scope change must be cleared to trigger a
+    fresh consent flow.
 -   **`adc`**: `google.auth.default(scopes=PUBLIC_SCOPES)` is called, and for
     credential subclasses that support `with_scopes` (service accounts,
     GCE/GKE metadata, impersonated) we re-apply via `creds.with_scopes(...)`.
@@ -118,7 +126,7 @@ How each provider supplies the scope:
 -   **Action**: Execute `drive.mount()` and transparently proxy Colab's
     proprietary credential propagation flow.
 -   **Code**: `python from google.colab import drive
-    drive.mount('/content/drive', timeout_ms=600000)`
+    drive.mount('/content/drive')`
 -   **Handling**: Because `drivefs` enforces the ephemeral side-channel
     propagation (`colab_request` over websocket), the CLI intercepts these
     messages using `ColabRuntime.colab_request_hook`. When intercepted, the CLI
@@ -130,27 +138,7 @@ How each provider supplies the scope:
     user is OAuthing in their browser. To avoid the upstream 10s
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
     subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
-    `ColabRuntime.execute_code`. Same applies to `colab auth`. Separately,
-    `google.colab.drive.mount` defaults `timeout_ms` to 120000 and that budget
-    is the `blocking_request` wait, which includes the browser step. The
-    injected call passes `timeout_ms=600000` so the kernel does not abandon
-    the mount at two minutes and then fail with `ValueError: mount failed`.
--   **Where the prompt runs**: The `colab_request` hook returns immediately
-    and finishes propagation on a daemon thread. The websocket recv loop stays
-    free to deliver the kernel's later output.
--   **Consent UX**: The CLI prints the `unauthorized_redirect_uri`, highlights
-    the `login_hint` account, and tries to open that URL in the GUI browser.
-    The user presses Enter on the controlling terminal (`/dev/tty` or, on
-    Windows, `CONIN$`).
--   **Multi-account 400**: Propagation HTTP 400 means the browser's active
-    Google account was not the CLI account. The CLI says so and replies to
-    the kernel with an error `colab_reply` instead of dumping the HTML body
-    and leaving `drive.mount` to time out. `--authuser N` is an opt-in that
-    appends `authuser` to the consent URL; it is not applied by default.
--   **What still depends on Google**: The CLI cannot make the browser
-    attribute the gsession to `login_hint` when a different account is active.
-    The user has to pick the matching account on the chooser. There is no
-    fully non-interactive Drive mount; the ephemeral consent page is required.
+    `ColabRuntime.execute_code`. Same applies to `colab auth`.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 
@@ -161,6 +149,12 @@ How each provider supplies the scope:
 -   **Viewing**: `colab log list` and `colab log show <session>`.
 -   **Conversion (Planned)**: Future expansion to convert history logs to
     `.ipynb` or `.html`.
+-   **Redaction**: Commands that read a secret (`--secret`, `colab secret set`,
+    `colab hf login`, `colab clone --token`, `colab share --via ngrok`)
+    register the value with `HistoryLogger.add_redaction`; every later event in
+    that process is written with `***` in place of the raw value and its
+    `repr()` form, in code, outputs and stdin events alike. A separate later
+    command that prints the value is not covered, because it does not know it.
 
 ### 5. Compute-Unit Usage (`colab usage`)
 
@@ -293,10 +287,29 @@ How each provider supplies the scope:
         installed), it falls back to reading the files from the project root.
     -   Prints the content to stdout.
 
+### 11. Secrets, Hugging Face, Clone, Share, Keep-Alive
+
+Full design in [07_secrets_tunnels_integrations.md](07_secrets_tunnels_integrations.md).
+
+| Command | What it runs on the VM |
+| --- | --- |
+| `colab secret set [-s S] NAME[=SOURCE]...` | `os.environ[...] = ...` in the session's kernel (the one `colab exec` uses) |
+| `colab hf login [-s S] [--token SOURCE]` | `HF_TOKEN` in the session kernel + `huggingface_hub.login(add_to_git_credential=False)` |
+| `colab hf download [-s S] REPO_ID [--repo-type] [--revision] [--local-dir]` | `huggingface_hub.snapshot_download(...)` (1 h timeout) |
+| `colab clone [-s S] REPO [DEST] [--branch] [--depth] [--token SOURCE\|none]` | `git clone` with the token as an `http.extraHeader` set via `GIT_CONFIG_*` for that one process (1 h timeout) |
+| `colab share [-s S] PORT [--via cloudflared\|ngrok] [--detach]`, `--list`, `--stop [PORT]` | Installs the tool from its vendor's signed apt repository and starts it detached; the public URL is read from its log |
+| `colab keepalive [-s S] [--minutes N]` | Nothing: pings the TFE keep-alive endpoint from the local process |
+
+SOURCE is `env` (default), `env:VAR`, `prompt` (needs an interactive
+console; otherwise exit 2), `hf-cli` or `gh-cli`. Literal values are refused.
+
 ## Implementation Details
 
--   **Code Injection**: Use a standard `run_code(session, code)` helper via
-    `ColabRuntime`.
+-   **Code Injection**: `run_automation(name, op, code, ...)` runs code via
+    `ColabRuntime`, prints and returns the outputs; `exit_if_failed(outputs)`
+    exits 1 on a kernel error. By default it uses a fresh kernel (fine for
+    filesystem work such as `install`); `session_kernel=True` reuses and records
+    the session's kernel, for state in the kernel process such as `os.environ`.
 -   **History Management**: Use `HistoryLogger` class to append structured
     events to session-specific `.jsonl` files.
 -   **Interactive Prompts**: Instrumented `stdin_hook` and `colab_request_hook`
@@ -313,13 +326,8 @@ TDD is mandatory for all automation features.
 -   **Test Case**: Verify `colab install` correctly injects `pip install` or `uv
     install` commands to the remote VM kernel.
 -   **Test Case**: Verify `colab drivemount` correctly injects `drive.mount()`
-    commands with `timeout_ms` of at least 10 minutes and registers the
-    `colab_request_hook` to intercept credential propagation events.
--   **Test Case**: A propagation HTTP 400 produces an account-mismatch message
-    (no raw HTML dump) and a `colab_reply` that carries `error`, so the kernel
-    does not sit until `timeout_ms`.
--   **Test Case**: `--authuser` rewrites the consent URL; the default path
-    leaves the server-built URL unchanged.
+    commands and registers the `colab_request_hook` to intercept credential
+    propagation events.
 
 ### 2. History Capture
 

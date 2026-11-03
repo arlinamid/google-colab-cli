@@ -13,14 +13,19 @@
 # limitations under the License.
 
 import abc
+import json
+import logging
+import os
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-import json
-import logging
 from typing import Dict, List, Optional, Union
 from urllib.parse import urljoin, urlparse
-import uuid
+
+import requests
+from pydantic import BaseModel, Field, TypeAdapter
 
 from colab_cli.consumption import (
     CcuInfo,
@@ -28,8 +33,6 @@ from colab_cli.consumption import (
     consumption_user_info_from_tunnel,
 )
 from colab_cli.utils import get_status_code
-from pydantic import BaseModel, Field, TypeAdapter
-import requests
 
 # Standard Colab Headers
 ACCEPT_JSON_HEADER = {"key": "Accept", "value": "application/json"}
@@ -38,6 +41,13 @@ COLAB_CLIENT_AGENT_HEADER = {
     "value": "colab-cli",
 }
 COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
+# Marks a request as one that should be resolved through the Colab tunnel
+# (Tunnel Frontend). Required by TFE-intercepted paths such as the keep-alive
+# ping; without it the front-door rejects the request with HTTP 400.
+COLAB_TUNNEL_HEADER = {"key": "X-Colab-Tunnel", "value": "Google"}
+# TFE records the activity as soon as the request arrives, so there is no
+# need to wait long for the (often non-responding) VM.
+KEEP_ALIVE_TIMEOUT = 10
 
 
 @dataclass
@@ -214,6 +224,12 @@ class Client:
             "value"
         ]
 
+        # Slow allocations may outlive AuthorizedSession's default read timeout.
+        if "timeout" not in kwargs:
+            timeout = os.getenv("COLAB_CLI_REQUEST_TIMEOUT")
+            if timeout:
+                kwargs["timeout"] = float(timeout)
+
         self.logger.debug(f"Request: {method} {endpoint}")
         self.logger.debug(f"Params: {params}")
 
@@ -254,6 +270,25 @@ class Client:
         assignments = self._issue_request(url, schema=ListedAssignments)
         return assignments.assignments
 
+    def keep_alive_assignment(self, endpoint: str):
+        """Refreshes the idle timer for the given assignment endpoint.
+
+        The backend only counts kernel activity as use, so traffic through an
+        ssh forward or a tunnel does not keep the runtime alive on its own.
+        TFE notes the activity as soon as the request arrives, then forwards it
+        to the VM, which does not always respond on this path: a read timeout
+        is therefore success, and only an HTTP error (e.g. 404 for a deleted
+        assignment) is raised.
+        """
+        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/{endpoint}/keep-alive/")
+        headers = {COLAB_TUNNEL_HEADER["key"]: COLAB_TUNNEL_HEADER["value"]}
+        try:
+            return self._issue_request(
+                url, method="GET", headers=headers, timeout=KEEP_ALIVE_TIMEOUT
+            )
+        except requests.exceptions.ReadTimeout:
+            return None
+
     def unassign(self, endpoint: str):
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
         resp = self._issue_request(url, schema=GetUnassignRequest)
@@ -269,20 +304,40 @@ class Client:
         accelerator: Optional[Accelerator] = None,
         shape: Optional[Shape] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
-        assignment = self._get_assignment(
-            notebook_hash, variant, accelerator, shape
-        )
+        assignment = self._get_assignment(notebook_hash, variant, accelerator, shape)
         if isinstance(assignment, Assignment):
             return assignment
 
-        try:
-            res = self._post_assignment(
-                notebook_hash, assignment.token, variant, accelerator, shape
-            )
-        except ColabRequestError as e:
-            if get_status_code(e) == 412:
-                raise TooManyAssignmentsError(str(e))
-            raise e
+        retries = max(0, int(os.getenv("COLAB_CLI_ASSIGN_RETRIES", "3")))
+        backoff = max(0.0, float(os.getenv("COLAB_CLI_RETRY_BACKOFF", "10")))
+        for attempt in range(retries + 1):
+            try:
+                res = self._post_assignment(
+                    notebook_hash, assignment.token, variant, accelerator, shape
+                )
+                break
+            except (ColabRequestError, requests.exceptions.ReadTimeout) as e:
+                status = (
+                    get_status_code(e) if isinstance(e, ColabRequestError) else None
+                )
+                if status == 412:
+                    raise TooManyAssignmentsError(str(e))
+                retryable = isinstance(
+                    e, requests.exceptions.ReadTimeout
+                ) or status in (502, 503, 504)
+                if not retryable or attempt >= retries:
+                    raise
+                delay = backoff * (2**attempt)
+                self.logger.warning(
+                    "Assignment request failed; retrying in %.0fs", delay
+                )
+                time.sleep(delay)
+                # Reconcile an uncertain POST before submitting the same request again.
+                assignment = self._get_assignment(
+                    notebook_hash, variant, accelerator, shape
+                )
+                if isinstance(assignment, Assignment):
+                    return assignment
 
         return res
 
@@ -329,4 +384,3 @@ class Client:
         return self._issue_request(
             url, method="POST", headers=headers, schema=PostAssignmentResponse
         )
-

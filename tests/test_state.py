@@ -344,3 +344,32 @@ def test_state_store_multiprocess_concurrency(temp_config):
     assert p1.exitcode == 0
     assert p2.exitcode == 0
     assert len(StateStore(temp_config).list()) == 80
+
+
+def _session(name="s1", running=None):
+    return SessionState(
+        name=name,
+        token="t",
+        url="http://localhost",
+        endpoint="e",
+        running=running,
+    )
+
+
+def test_update_if_present_does_not_resurrect_a_stopped_session(temp_config):
+    """A command that finishes after `colab stop` removed its session must not
+    write the session back into sessions.json."""
+    store = StateStore(temp_config)
+    store.add(_session(running="exec(x.py)"))
+    store.remove("s1")  # `colab stop` from another terminal
+
+    assert store.update_if_present(_session()) is False
+    assert store.get("s1") is None
+
+
+def test_update_if_present_updates_a_live_session(temp_config):
+    store = StateStore(temp_config)
+    store.add(_session(running="exec(x.py)"))
+
+    assert store.update_if_present(_session(running=None)) is True
+    assert store.get("s1").running is None

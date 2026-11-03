@@ -18,10 +18,44 @@ import os
 from typing import Any, Dict, List
 
 
+REDACTED = "***"
+
+
+def _secret_forms(value: str) -> List[str]:
+    """The ways a secret can appear in logged text: raw and as a repr() body.
+
+    Injected kernel code embeds values with repr(), which escapes quotes and
+    backslashes, so the raw value alone would miss it.
+    """
+    return list({value, repr(value)[1:-1]})
+
+
 class HistoryLogger:
     def __init__(self, log_dir: str = "~/.config/colab-cli/history"):
         self.log_dir = os.path.expanduser(log_dir)
         os.makedirs(self.log_dir, exist_ok=True)
+        self._redactions: List[str] = []
+
+    def add_redaction(self, value: str) -> None:
+        """Never write ``value`` (a secret) to the history; log ``***`` instead."""
+        if not value:
+            return
+        for form in _secret_forms(value):
+            if form not in self._redactions:
+                self._redactions.append(form)
+        # Longest first, so a form is not partly replaced by a shorter one.
+        self._redactions.sort(key=len, reverse=True)
+
+    def _redact(self, obj: Any) -> Any:
+        if isinstance(obj, str):
+            for form in self._redactions:
+                obj = obj.replace(form, REDACTED)
+            return obj
+        if isinstance(obj, dict):
+            return {k: self._redact(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._redact(v) for v in obj]
+        return obj
 
     def _get_log_path(self, session_name: str) -> str:
         return os.path.join(self.log_dir, f"{session_name}.jsonl")
@@ -44,6 +78,8 @@ class HistoryLogger:
             "event_type": event_type,
             **data,
         }
+        if self._redactions:
+            event = self._redact(event)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
 

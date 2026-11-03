@@ -19,6 +19,19 @@ from typing import Any, Callable, Dict, List, Optional
 import jupyter_kernel_client
 import requests
 
+# jupyter_kernel_client raises a bare RuntimeError with this text when the
+# kernel websocket drops mid-execution (for example `colab stop` from another
+# terminal, or the VM being reclaimed).
+_CONNECTION_LOST = "Connection was lost"
+
+
+class SessionConnectionLost(RuntimeError):
+    """The connection to the session's kernel dropped during an execution."""
+
+    def __init__(self, session_name: Optional[str]):
+        self.session_name = session_name
+        super().__init__(f"Lost the connection to session '{session_name}'.")
+
 
 class ColabRuntime:
     def __init__(
@@ -177,6 +190,15 @@ class ColabRuntime:
     ):
         self.kernel_client.restart(timeout=timeout)
 
+    def _run(self, call, *args, **kwargs):
+        """Run a kernel-client call, naming a dropped connection explicitly."""
+        try:
+            return call(*args, **kwargs)
+        except RuntimeError as e:
+            if _CONNECTION_LOST in str(e):
+                raise SessionConnectionLost(self.session_name) from e
+            raise
+
     def execute_code(
         self,
         code: str,
@@ -234,13 +256,16 @@ class ColabRuntime:
                         if idx < len(outputs):
                             output_hook(outputs[idx])
 
-            reply = self.kernel_client.execute_interactive(
-                code, output_hook=wrapped_output_hook, **kwargs
+            reply = self._run(
+                self.kernel_client.execute_interactive,
+                code,
+                output_hook=wrapped_output_hook,
+                **kwargs,
             )
             # execute_interactive returns the raw reply message
             reply_content = reply["content"] if reply else {"status": "error"}
         else:
-            reply = self.kernel_client.execute(code, **kwargs)
+            reply = self._run(self.kernel_client.execute, code, **kwargs)
             if not reply:
                 return []
             outputs = reply.get("outputs", [])

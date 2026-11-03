@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The package version is derived from the git tag via `hatch-vcs`; each release
 below corresponds to a tag of the same name.
 
+## [Unreleased]
+
+## [0.8.0] - 2026-11-03
+
+First release of the hybrid edition: Google's Colab CLI with Windows fixes and extra features on top.
+
+### Changed
+
+- **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh`, `cmd` for `colab ssh -- CMD`, and `proxy` otherwise.
+- **ssh:** When the server rejects a connection with HTTP 429 and reports its
+  SSH session limit, `colab ssh` now says the limit is reached (N of N sessions
+  in use on the runtime) and that the limit depends on the Colab plan. A 429
+  without a usable limit keeps the previous message.
+
+### Added
+
+- **secrets:** `colab secret set NAME[=SOURCE]...` and `--secret` on `colab exec` and `colab run` put tokens into the kernel's environment without taking the value on the command line. SOURCE is `env` (default), `env:VAR`, `prompt`, `hf-cli` or `gh-cli`; values are written as `***` in the session history.
+- **ssh:** `colab ssh -L PORT` (repeatable, also `LOCAL:REMOTE` and `LOCAL:HOST:REMOTE`), `-N/--no-shell`, and `colab forward PORT...` forward local ports to the runtime. The runtime is kept alive while a forward is open (`--no-keep-alive` to turn it off).
+- **share:** `colab share PORT [--via cloudflared|ngrok]` gives a runtime port a public URL; it keeps the runtime alive until Ctrl+C, or `--detach` leaves the tunnel running. `--list` and `--stop [PORT]` manage shares.
+- **keepalive:** `colab keepalive [--minutes N]` keeps a runtime alive without running code.
+- **hf:** `colab hf login` and `colab hf download REPO_ID` for Hugging Face on the runtime.
+- **clone:** `colab clone REPO [DEST]` clones `owner/name` or an https URL onto the runtime; private GitHub repositories use `GH_TOKEN`, `GITHUB_TOKEN` or the local `gh` login, and the token is not stored in the URL or `.git/config`.
+- **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
+
+### Fixed
+
+- **ssh:** `colab --config FILE ssh` and `colab --auth adc ssh` now keep those options in the ProxyCommand that `colab ssh` starts, so it uses the same sessions file and auth provider instead of the defaults.
+- **windows:** `colab console` works in PowerShell and cmd.exe (raw keys, ANSI color), and `colab drivemount` shows the consent link and waits for Enter on the console.
+- **windows:** `colab edit` no longer fails with `PermissionError` on its temporary file, and Windows `$EDITOR` paths (backslashes, `.cmd` launchers) work.
+- **console:** piped `colab console` no longer cuts off its output on a fresh runtime or leaks terminal replies into the next prompt.
+- **exec:** `colab exec` exits 1 when the code or a notebook cell raises; `--cells`, `--stop-on-error`, `--check` and `--check-only` select and pre-check notebook cells.
+- **sessions:** a running command reports a stopped session in one line instead of a traceback, and no longer puts a stopped session back into `sessions.json`.
+- **ssh:** a `%` in a session name or identity path no longer breaks the ProxyCommand; a passphrase-protected `--identity` key asks for its passphrase instead of hanging.
+
 ## [0.7.1] - 2026-09-14
 
 ### Fixed
@@ -76,5 +110,6 @@ below corresponds to a tag of the same name.
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.5.11...v0.6.0

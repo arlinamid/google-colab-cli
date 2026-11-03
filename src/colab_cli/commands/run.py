@@ -46,7 +46,12 @@ from colab_cli.client import (
     Shape,
     TooManyAssignmentsError,
 )
-from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
+from colab_cli.commands.execution import (
+    SECRET_HELP,
+    _build_env_prelude,
+    _parse_env_vars,
+)
+from colab_cli.secrets import resolve_secrets
 from colab_cli.commands.session import resolve_runtime_options
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
@@ -266,9 +271,13 @@ def run_command(
             "--env",
             help=(
                 "Set an environment variable in the remote kernel as KEY=VALUE. "
-                "Repeat for multiple variables."
+                "Repeat for multiple variables. For tokens use --secret."
             ),
         ),
+    ] = None,
+    secret: Annotated[
+        Optional[List[str]],
+        typer.Option("--secret", help=SECRET_HELP),
     ] = None,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
@@ -285,6 +294,7 @@ def run_command(
     script_args = script_args or []
     script_args, inline_env = _extract_env_args_from_script_args(script_args)
     env_vars = _parse_env_vars([*(env or []), *inline_env])
+    env_vars.update(resolve_secrets(secret, state.history))
 
     # AGENTS.md item 10: validate locally BEFORE allocating a VM. A typo'd
     # script path should not cost the user real compute.
@@ -391,6 +401,7 @@ def run_command(
     runtime = ColabRuntime(
         s.url,
         s.token,
+        session_name=s.name,
         kernel_id=s.kernel_id,
         session_id=s.session_id,
         on_kernel_started=on_started,
@@ -444,7 +455,7 @@ def run_command(
             )
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
         # Best-effort runtime close (keeps remote kernel alive for --keep).
         try:
             runtime.stop()
@@ -473,7 +484,9 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         # The script may have outlived the proxy token.
         fresh = state.get_session(name, ignore_missing_session=True)
         if fresh:
-            rt = ColabRuntime(fresh.url, fresh.token, kernel_id=fresh.kernel_id)
+            rt = ColabRuntime(
+                fresh.url, fresh.token, kernel_id=fresh.kernel_id, session_name=fresh.name
+            )
             rt.stop(shutdown_kernel=True)
     except Exception:
         pass

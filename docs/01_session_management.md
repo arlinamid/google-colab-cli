@@ -1,5 +1,7 @@
 ---
 log:
+2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
+2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
 2026-09-25: Removed the keep-alive background daemon and related client/CLI ping functions. VM liveness is automatically maintained by the Colab backend based on kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -53,6 +55,31 @@ The CLI maps user flags to these backend parameters:
 
 ## Approach
 
+### HTTP Timeout and Allocation Recovery
+
+`COLAB_CLI_REQUEST_TIMEOUT` sets the HTTP request timeout in seconds. If unset,
+the session's existing default applies (AuthorizedSession defaults to 120 seconds).
+An explicit `timeout=` passed by a caller takes precedence. This does not change
+kernel execution timeouts, Colab runtime lifetime, or benchmark job timeouts.
+
+Allocation POSTs retry `ReadTimeout` and HTTP 502/503/504 at most
+`COLAB_CLI_ASSIGN_RETRIES` times (default 3; 0 disables retries). Between attempts,
+the client waits `COLAB_CLI_RETRY_BACKOFF * 2**attempt` seconds (default 10, 20, 40).
+It then queries the same notebook hash: an existing allocation is returned directly;
+otherwise the refreshed XSRF token is used for the next POST. HTTP 412 still raises
+`TooManyAssignmentsError`; other errors are not retried. Failed initial/recovery
+GETs and exhausted POST retries propagate to the caller. There is no unlimited wait.
+
+```bash
+COLAB_CLI_REQUEST_TIMEOUT=300 COLAB_CLI_ASSIGN_RETRIES=3 COLAB_CLI_RETRY_BACKOFF=10 \
+  colab new --session kernel-benchmark-v6e --tpu v6e1
+```
+
+Regression tests cover timeout precedence, same-request recovery, refreshed
+tokens, retry limits, exponential backoff and permanent-error handling. A live
+allocation/recovery test is also required before declaring the behavior verified
+end to end; mocked timeouts alone do not establish backend compatibility.
+
 ### 1. New Session (`colab new`)
 - **API**: `GET https://colab.sandbox.google.com/tun/m/assign` (based on HAR).
 - **Parameters**:
@@ -96,7 +123,7 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
 - **Global Flags**:
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
-- **Token Storage**: Credentials are persisted to `~/.config/colab-cli/token.json` after the initial flow.
+- **Token Storage**: Credentials are persisted to the OS native keyring via the `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`) after the initial flow. If the keyring is inaccessible or locked, `_run_remote_flow` is invoked for the current run and a warning is printed to stderr. A legacy `~/.config/colab-cli/token.json` is migrated into the keyring on first use and deleted after a successful keyring write, or immediately if the keyring already holds a token.
 - Use `requests` for robust HTTP interactions and `pydantic` for schema validation.
 - Handle authentication headers (likely `Authorization: Bearer <token>` or cookies).
 

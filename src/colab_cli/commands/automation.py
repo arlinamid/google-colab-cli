@@ -118,11 +118,38 @@ def run_automation(
     timeout: Optional[float] = None,
     authuser: str = "0",
     rewrite_auth_url: bool = False,
+    session_kernel: bool = False,
 ):
+    """Runs ``code`` on the session and prints its outputs; returns them.
+
+    By default this uses a fresh kernel, which is fine for work that only
+    touches the filesystem. ``session_kernel=True`` uses the same kernel as
+    ``colab exec`` (recording it if new), for state that lives in the kernel
+    process, such as ``os.environ``.
+    """
     from colab_cli.common import state
 
     s = state.get_session(name)
-    runtime = ColabRuntime(s.url, s.token, session_name=s.name, history=state.history)
+    kernel_kwargs = {}
+    if session_kernel:
+
+        def on_kernel_started(kid):
+            s.kernel_id = kid
+            state.store.add(s)
+
+        def on_session_started(sid):
+            s.session_id = sid
+            state.store.add(s)
+
+        kernel_kwargs = {
+            "kernel_id": s.kernel_id,
+            "session_id": s.session_id,
+            "on_kernel_started": on_kernel_started,
+            "on_session_started": on_session_started,
+        }
+    runtime = ColabRuntime(
+        s.url, s.token, session_name=s.name, history=state.history, **kernel_kwargs
+    )
     runtime.colab_request_hook = make_drivefs_hook(
         state,
         s,
@@ -165,10 +192,17 @@ def run_automation(
                     sys.stderr.write("".join(tb) + "\n")
                 else:
                     sys.stderr.write(f"{ename}: {evalue}\n")
+        return outputs
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_if_present(s)
         runtime.stop()
+
+
+def exit_if_failed(outputs) -> None:
+    """Exits 1 if the kernel reported an error (run_automation already printed it)."""
+    if any(o.get("output_type") == "error" for o in outputs or []):
+        raise typer.Exit(code=1)
 
 
 def auth(

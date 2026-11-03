@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
@@ -151,10 +152,15 @@ def test_drivemount_hook_runs_off_the_websocket_thread(
     assert hook(other, MagicMock()) is False
 
 
-def test_drivemount_help_documents_authuser():
+def test_drivemount_help_documents_authuser(mocker):
+    # The update check is a network call; its banner must not decide the test.
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
     result = runner.invoke(app, ["drivemount", "--help"])
     assert result.exit_code == 0
-    assert "--authuser" in result.output
+    # Typer forces color under GitHub Actions (GITHUB_ACTIONS, FORCE_COLOR),
+    # and the escape codes split "--authuser"; compare the plain text.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--authuser" in plain
 
 
 @patch("colab_cli.commands.automation.ColabRuntime")
