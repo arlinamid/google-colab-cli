@@ -20,6 +20,12 @@ below corresponds to a tag of the same name.
 
 ### Added
 
+- **secrets:** `colab secret set NAME[=SOURCE]...` and `--secret` on `colab exec` and `colab run` put tokens into the kernel's environment without taking the value on the command line. SOURCE is `env` (default), `env:VAR`, `prompt`, `hf-cli` or `gh-cli`; values are written as `***` in the session history.
+- **ssh:** `colab ssh -L PORT` (repeatable, also `LOCAL:REMOTE` and `LOCAL:HOST:REMOTE`), `-N/--no-shell`, and `colab forward PORT...` forward local ports to the runtime. The runtime is kept alive while a forward is open (`--no-keep-alive` to turn it off).
+- **share:** `colab share PORT [--via cloudflared|ngrok]` gives a runtime port a public URL; it keeps the runtime alive until Ctrl+C, or `--detach` leaves the tunnel running. `--list` and `--stop [PORT]` manage shares.
+- **keepalive:** `colab keepalive [--minutes N]` keeps a runtime alive without running code.
+- **hf:** `colab hf login` and `colab hf download REPO_ID` for Hugging Face on the runtime.
+- **clone:** `colab clone REPO [DEST]` clones `owner/name` or an https URL onto the runtime; private GitHub repositories use `GH_TOKEN`, `GITHUB_TOKEN` or the local `gh` login, and the token is not stored in the URL or `.git/config`.
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
 
 ### Fixed

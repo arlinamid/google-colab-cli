@@ -40,6 +40,9 @@ colab ssh [OPTIONS] [-- CMD [ARGS]...]
 | `--tpu` | str | None | TPU accelerator for a runtime this command creates (v5e1, v6e1). |
 | `--high-mem` | bool | False | Request high-RAM when this command auto-creates a runtime (ignored when connecting to an existing session). |
 | `--rm` | bool | False | Stop the runtime when the session ends. Interactive: only a runtime `colab ssh` auto-created (a reused session is never removed). `--proxy-mode`: the bridged session, on disconnect. Ignored with `-- CMD`. |
+| `-L`, `--forward` | str (repeatable) | None | Forward a local port to the runtime: `PORT`, `LOCAL:REMOTE` or `LOCAL:HOST:REMOTE` (host defaults to `localhost` on the runtime). Works with the shell, `-- CMD` and `-N`. Ignored with `--proxy-mode` (use `LocalForward` in `~/.ssh/config`). |
+| `-N`, `--no-shell` | bool | False | With `-L`: only hold the forwards open, no shell; Ctrl+C stops. |
+| `--no-keep-alive` | bool | False | With `-L`: do not ping keep-alive (the runtime may idle out). |
 
 ### `~/.ssh/config` usage
 `--proxy-mode` turns `colab ssh` into a transport any SSH-based tool can drive:
@@ -58,6 +61,29 @@ first connect, `--gpu/--tpu` size it, and `--rm` makes the host ephemeral. Use a
 where a bare `colab` may not be on `PATH`. External SSH tools run their own
 remote command, so to also land in `/content` add `RequestTTY yes` and
 `RemoteCommand cd /content 2>/dev/null; exec bash -l`.
+
+### Port forwarding
+Reach a web UI on the runtime (Gradio, Streamlit, Jupyter, TensorBoard) at
+`http://localhost:PORT`, privately (only your machine can connect):
+
+```
+colab forward -s NAME 7860              # = colab ssh -s NAME -N -L 7860
+colab ssh -s NAME -L 8080:8888          # local 8080 -> runtime 8888, plus a shell
+colab ssh -s NAME -L 6006 -- tensorboard --logdir runs   # forward while CMD runs
+```
+
+- `-o ExitOnForwardFailure=yes` is added, so a local port that is already in
+  use makes ssh exit instead of running without the forward.
+- **Keep-alive**: the backend keeps a runtime alive only on kernel activity,
+  so forward traffic alone would let it idle out (~90 min). While a forward is
+  open, `colab` runs ssh under `Popen` and pings
+  `GET /tun/m/<endpoint>/keep-alive/` every 60 s from its own process (no
+  daemon, no background thread) until ssh exits. A failed ping warns once; a
+  404 (runtime gone) stops pinging. `--no-keep-alive` turns it off.
+- `colab forward` and `-N` run until Ctrl+C (exit 130). In scripts, use
+  `-L PORT -- CMD`, which ends with CMD.
+- For a public URL instead, see `colab share` in
+  [07_secrets_tunnels_integrations.md](07_secrets_tunnels_integrations.md).
 
 ### Remote command
 `colab ssh [-s NAME] -- CMD [ARGS]...` runs CMD in `/content` on an existing
@@ -134,6 +160,13 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
 7. **Remote command**: `-- CMD` resolves an existing session and runs CMD as
    described under Remote command. Its ProxyCommand child (mode `cmd`) only
    resolves the session too, so neither process creates a runtime.
+8. **Port forwarding**: each `-L` spec is validated (ports 1-65535, exit 2
+   otherwise) and becomes `-L LOCAL:HOST:REMOTE` plus
+   `-o ExitOnForwardFailure=yes`. With forwards and keep-alive on, ssh runs
+   under `Popen` and `keepalive.wait_with_keep_alive` pings between
+   `proc.wait(timeout=60)` calls; the exit code is ssh's (130 after Ctrl+C).
+   `-N` without `-L` is an error (exit 2). Tests: `tests/test_ssh_forward.py`,
+   `tests/test_keepalive.py`.
 
 ## Testing Strategy (TDD)
 

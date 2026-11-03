@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: Added section 11 (secrets, Hugging Face, clone, share, keepalive; details in 07_secrets_tunnels_integrations.md). `run_automation` now returns its outputs, can run in the session's own kernel (`session_kernel=True`), and `HistoryLogger.add_redaction` writes registered secret values as `***`.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -148,6 +149,12 @@ How each provider supplies the scope:
 -   **Viewing**: `colab log list` and `colab log show <session>`.
 -   **Conversion (Planned)**: Future expansion to convert history logs to
     `.ipynb` or `.html`.
+-   **Redaction**: Commands that read a secret (`--secret`, `colab secret set`,
+    `colab hf login`, `colab clone --token`, `colab share --via ngrok`)
+    register the value with `HistoryLogger.add_redaction`; every later event in
+    that process is written with `***` in place of the raw value and its
+    `repr()` form, in code, outputs and stdin events alike. A separate later
+    command that prints the value is not covered, because it does not know it.
 
 ### 5. Compute-Unit Usage (`colab usage`)
 
@@ -280,10 +287,29 @@ How each provider supplies the scope:
         installed), it falls back to reading the files from the project root.
     -   Prints the content to stdout.
 
+### 11. Secrets, Hugging Face, Clone, Share, Keep-Alive
+
+Full design in [07_secrets_tunnels_integrations.md](07_secrets_tunnels_integrations.md).
+
+| Command | What it runs on the VM |
+| --- | --- |
+| `colab secret set [-s S] NAME[=SOURCE]...` | `os.environ[...] = ...` in the session's kernel (the one `colab exec` uses) |
+| `colab hf login [-s S] [--token SOURCE]` | `HF_TOKEN` in the session kernel + `huggingface_hub.login(add_to_git_credential=False)` |
+| `colab hf download [-s S] REPO_ID [--repo-type] [--revision] [--local-dir]` | `huggingface_hub.snapshot_download(...)` (1 h timeout) |
+| `colab clone [-s S] REPO [DEST] [--branch] [--depth] [--token SOURCE\|none]` | `git clone` with the token as an `http.extraHeader` set via `GIT_CONFIG_*` for that one process (1 h timeout) |
+| `colab share [-s S] PORT [--via cloudflared\|ngrok] [--detach]`, `--list`, `--stop [PORT]` | Installs the tool from its vendor's signed apt repository and starts it detached; the public URL is read from its log |
+| `colab keepalive [-s S] [--minutes N]` | Nothing: pings the TFE keep-alive endpoint from the local process |
+
+SOURCE is `env` (default), `env:VAR`, `prompt` (needs an interactive
+console; otherwise exit 2), `hf-cli` or `gh-cli`. Literal values are refused.
+
 ## Implementation Details
 
--   **Code Injection**: Use a standard `run_code(session, code)` helper via
-    `ColabRuntime`.
+-   **Code Injection**: `run_automation(name, op, code, ...)` runs code via
+    `ColabRuntime`, prints and returns the outputs; `exit_if_failed(outputs)`
+    exits 1 on a kernel error. By default it uses a fresh kernel (fine for
+    filesystem work such as `install`); `session_kernel=True` reuses and records
+    the session's kernel, for state in the kernel process such as `os.environ`.
 -   **History Management**: Use `HistoryLogger` class to append structured
     events to session-specific `.jsonl` files.
 -   **Interactive Prompts**: Instrumented `stdin_hook` and `colab_request_hook`

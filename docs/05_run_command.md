@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: Documented `--env KEY=VALUE` and added `--secret NAME[=SOURCE]`: values read locally (env, env:VAR, prompt, hf-cli, gh-cli), resolved before the VM is allocated (a missing value exits 2 without spending compute), and written as `***` in the history log.
 2026-09-25: Removed keep-alive daemon spawning from session allocation and teardown. `--keep` remains supported and skips unassignment on completion.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
@@ -34,6 +35,8 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--high-mem` | bool | False | Same as `colab new --high-mem` — request high-RAM when supported. |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
 | `--timeout` | float | 30.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
+| `--env` | str (repeatable) | None | `KEY=VALUE` set in the kernel's `os.environ` before the script runs. Also accepted after `SCRIPT` (`colab run script.py --env K=V`), where it is not forwarded to `sys.argv`. |
+| `--secret` | str (repeatable) | None | `NAME[=SOURCE]` set like `--env`, but the value is read locally (SOURCE: `env` default, `env:VAR`, `prompt`, `hf-cli`, `gh-cli`), never taken from the command line, and logged as `***`. Must come before `SCRIPT`. Resolved before the VM is allocated. |
 
 ### Shebang usage
 With `--keep` and `--gpu` baked into the shebang line, an entire one-file workload becomes:

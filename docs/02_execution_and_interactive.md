@@ -36,6 +36,7 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s) to allow long-running silent tasks (like model compilation or data downloading) to execute without being prematurely killed.
+- **Environment and Secrets**: `--env KEY=VALUE` (repeatable) sets plain variables in the kernel's `os.environ` before the code runs. For tokens use `--secret NAME[=SOURCE]` (repeatable), which never takes the value on the command line: SOURCE is `env` (the local `NAME` variable, default), `env:VAR`, `prompt` (hidden, needs an interactive console), `hf-cli` or `gh-cli`. Both are prepended to every executed block as `os.environ[...] = ...`; secret values are registered with the history logger and written as `***`. Secrets are resolved after `--check`/`--check-only` and before the kernel is contacted, so a missing value exits 2 without running anything. To set a secret once for the session, use `colab secret set` (see [07_secrets_tunnels_integrations.md](07_secrets_tunnels_integrations.md)).
 
 ### 3. Console (`colab console`)
 - **Implementation**: Connects directly to the backend terminal endpoint (`/colab/tty`) via WebSockets using `websocket-client`.

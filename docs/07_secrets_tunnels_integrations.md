@@ -2,6 +2,7 @@
 log:
 2026-11-03: Initial design and implementation: secret specs and history redaction (`colab secret set`, `--secret` on `exec`/`run`), ssh port forwarding with keep-alive (`colab ssh -L`, `colab forward`), `colab hf login/download`, `colab clone`, `colab share` (cloudflared/ngrok) and `colab keepalive`. Verified live on Windows against a CPU runtime.
 2026-11-03: Second live run. Fixed a hang: a prompt source with no console blocked forever on Windows (`isatty()` is true for NUL); `_can_prompt()` now checks `GetConsoleMode`. Verified a private-repo clone with `gh auth token`, two simultaneous `-L` forwards, share replacement on the same port, `colab keepalive --minutes 1`. Documented the cross-command redaction limit.
+2026-11-03: Third live run with real tokens: `colab hf login` (HF_TOKEN from the local environment) and `colab share --via ngrok --token env:NGROK_TOKEN`. Added usage examples, the env:VAR tip for differently named variables, and the hf login warning.
 ---
 
 # Design: Secrets, Port Forwarding, Tunnels and Integrations
@@ -19,6 +20,30 @@ TensorBoard) served by the runtime. Before this change:
 - Client-side keep-alive was removed upstream (`d8a2b92`): the backend keeps a
   runtime alive only on kernel activity, so ssh or tunnel traffic alone lets it
   idle out (~90 minutes).
+
+## Quick start
+
+Set tokens in your own shell, never in a chat or a command line, then pass
+their names:
+
+```bash
+export HF_TOKEN=...            # PowerShell: $env:HF_TOKEN = "..."
+export NGROK_TOKEN=...
+
+colab secret set -s s1 HF_TOKEN WANDB_API_KEY=prompt
+colab exec -s s1 --secret OPENAI_API_KEY -f job.py
+colab hf login -s s1                          # HF_TOKEN, then your hf login
+colab hf download -s s1 google/gemma-3-1b-it --local-dir /content/gemma
+colab clone -s s1 me/private-repo             # GH_TOKEN, GITHUB_TOKEN or gh login
+colab forward -s s1 7860                      # http://localhost:7860, only for you
+colab share -s s1 7860                        # public trycloudflare.com URL
+colab share -s s1 7860 --via ngrok --token env:NGROK_TOKEN
+colab share -s s1 --list ; colab share -s s1 --stop 7860
+```
+
+`env:VAR` reads any variable name, so a token kept under a different name
+(`NGROK_TOKEN` instead of `NGROK_AUTHTOKEN`) needs no renaming. On Windows
+PowerShell set variables with `$env:NAME = "..."`; they apply to that terminal.
 
 ## Secrets (`colab_cli/secrets.py`)
 
@@ -98,6 +123,8 @@ timeout is success. Commands that hold a forward or tunnel open ping it every
 - `colab hf login [--token SOURCE]`: default sources `env:HF_TOKEN`, `hf-cli`,
   `prompt`. Sets `HF_TOKEN` in the session kernel and runs
   `huggingface_hub.login(add_to_git_credential=False)`.
+  huggingface_hub prints a warning that `HF_TOKEN` is set as well as the token
+  just configured; it is harmless, both hold the same token.
 - `colab hf download REPO_ID [--repo-type model|dataset|space] [--revision R]
   [--local-dir DIR]`: `snapshot_download` on the runtime, values passed with
   `repr()`, timeout one hour. A missing `huggingface_hub` points to
@@ -160,3 +187,11 @@ including its base64 form), and `--token none` on it failed with exit 1;
 no token exited 2 at once; a cloudflared share of a directory holding only a
 test file returned HTTP 200, a second share on the same port replaced it, and
 `--stop` removed it; `colab keepalive --minutes 1` exited after 64 s.
+
+Third live run (Windows, CPU runtime, 2026-11-03, with the user's own
+tokens): `colab hf login` took `HF_TOKEN` from the local environment and
+logged in as the account owner, the exec kernel saw `HF_TOKEN`, and
+`hf download` worked; `colab share 8100 --via ngrok --token env:NGROK_TOKEN
+--detach` installed ngrok from its apt repository and the `ngrok-free.app`
+URL returned the test file with HTTP 200 (502 while the test server was not
+running, 404 after `--stop`). Neither token appeared in the history file.
