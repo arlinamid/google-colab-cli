@@ -49,7 +49,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS runs in smoke-macos, which does not gate publishing: hosted
+        # macOS arm64 runners are often unavailable ("not acquired by Runner
+        # ... after multiple attempts"), and the pure-Python wheel is already
+        # tested on macOS by ci.yml.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the wheel in a clean environment and run it
+        shell: bash
+        run: |
+          uv venv --python 3.12 smoke
+          if [ "$RUNNER_OS" = "Windows" ]; then bin=smoke/Scripts; else bin=smoke/bin; fi
+          uv pip install --python smoke dist/*.whl
+          "$bin/colab" version | grep -F "${GITHUB_REF_NAME#v}"
+          for cmd in secret hf clone forward share keepalive ssh exec run; do
+            "$bin/colab" "$cmd" --help > /dev/null
+          done
+
+  smoke-macos:
+    name: Install and run (macos-latest, informational)
+    needs: build
+    runs-on: macos-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
