@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: Added port forwarding: `colab ssh -L SPEC` (repeatable; shell, `-- CMD` and `-N/--no-shell`) and `colab forward -s S PORT...`, with `ExitOnForwardFailure=yes`. While a forward is open the CLI pings the TFE keep-alive endpoint every 60s from its own process (no daemon); `--no-keep-alive` turns it off. See docs/07_secrets_tunnels_integrations.md.
 2026-10-29: Added `colab ssh [-s NAME] -- CMD`, which runs one command on an existing session and exits with its status (a PTY only when stdin and stdout are terminals; neither it nor its ProxyCommand child creates a runtime). Its handshake carries `ssh-mode-cmd`, and the update banner is skipped for `ssh` when stdout is not a terminal. Added `tests/test_ssh_cmd.py`.
 2026-10-29: HTTP 429 now shows the server's SSH session limit ("N of N SSH sessions in use") when the body carries one.
 2026-10-29: The ProxyCommand that `colab ssh` starts now keeps a non-default global `--auth` and `--config` (as an absolute path), so `colab --config ALT ssh -s S` bridges S from ALT instead of the default sessions file.

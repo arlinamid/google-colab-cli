@@ -67,6 +67,10 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - `colab auth -s <name>` — VM-side GCP creds, needed before in-VM GCS/BigQuery calls (interactive; not agent-runnable).
 - `colab drivemount -s <name> [--authuser N] [PATH]` — mounts Drive at `/content/drive` by default (interactive; not agent-runnable). The user must approve the printed consent URL in a browser as the same account `colab whoami` shows; a multi-account browser rejects the mount with HTTP 400 unless that account is the one selected on the chooser. The kernel waits 10 minutes, not 2.
 - `colab install -s <name> pkg1 pkg2` — installs via `uv pip install --system`, falling back to `pip`. Also `colab install -s <name> -r requirements.txt`.
+- **Secrets:** never put a token value on the command line. Use `NAME[=SOURCE]` specs, SOURCE = `env` (default) / `env:VAR` / `prompt` / `hf-cli` / `gh-cli`: `colab secret set -s <name> HF_TOKEN`, or `colab exec -s <name> --secret HF_TOKEN -f job.py`. Values are logged as `***`. `prompt` needs a terminal (not agent-runnable); prefer `env:`.
+- `colab hf login -s <name>` / `colab hf download -s <name> REPO_ID [--local-dir DIR]` — Hugging Face on the runtime.
+- `colab clone -s <name> owner/repo [DEST]` — clone onto the runtime (`/content/<repo>`); private GitHub repos use `GH_TOKEN` or the local `gh` login.
+- `colab forward -s <name> PORT...` / `colab share -s <name> PORT [--via ngrok] [--detach]` — private localhost forward or public URL for a web UI on the runtime. Both run until Ctrl+C and keep the runtime alive; for agents use `colab share --detach` (then `colab share --stop PORT`) or `colab ssh -s <name> -L PORT -- CMD`.
 
 ### Inspect & report
 - `colab help` (or `colab help <cmd>`) lists/explains commands; the listing is alphabetical.

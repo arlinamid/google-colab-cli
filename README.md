@@ -78,11 +78,13 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Execution
 | Command | Description |
 | --- | --- |
-| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
-| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--cells SPEC] [--stop-on-error] [--check \| --check-only]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
+| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] [--secret SPEC] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
+| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
-| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
+| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
+| `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
+| `colab share [-s NAME] PORT [--via cloudflared\|ngrok] [--detach]` | Share a runtime port at a public URL (keeps the runtime alive until Ctrl+C; `--list`, `--stop`) |
 
 ### File Operations
 | Command | Description |
@@ -99,11 +101,32 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab auth [-s NAME]` | Authenticate the VM for GCP services (BigQuery, GCS, etc.) |
 | `colab drivemount [-s NAME] [--authuser N] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
 | `colab install [-s NAME] [-r FILE \| PKG...]` | Install packages on the VM using `uv` (falls back to `pip`) |
+| `colab secret set [-s NAME] NAME[=SOURCE]...` | Set secrets in the kernel's environment; values never go on the command line or into the history log |
+| `colab hf login [-s NAME] [--token SOURCE]` | Log the runtime in to Hugging Face |
+| `colab hf download [-s NAME] REPO_ID [--repo-type T] [--revision R] [--local-dir DIR]` | Download a Hugging Face model, dataset or space onto the runtime |
+| `colab clone [-s NAME] REPO [DEST] [--branch B] [--depth N] [--token SOURCE]` | Clone a git repository (GitHub `owner/name` or https URL) onto the runtime |
+| `colab keepalive [-s NAME] [--minutes N]` | Keep a runtime alive without running code (e.g. behind a detached share) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
 | `colab usage` | Show account compute-unit usage rate and balance |
 | `colab pay` | Open the Colab subscription page to manage compute units |
 | `colab version` | Print the installed version of the CLI |
 | `colab update [--install]` | Check for a newer release (and optionally upgrade the CLI in place) |
+
+### Secrets, Tunnels and Integrations
+
+Tokens are passed as `NAME[=SOURCE]`, never as values: `SOURCE` is `env` (the local `NAME` variable, the default), `env:VAR`, `prompt` (hidden), `hf-cli` (`hf auth token`) or `gh-cli` (`gh auth token`). Values are written as `***` in the history log.
+
+```bash
+colab secret set -s s1 HF_TOKEN WANDB_API_KEY=prompt
+colab exec -s s1 --secret OPENAI_API_KEY -f job.py
+colab hf login -s s1 && colab hf download -s s1 google/gemma-3-1b-it
+colab clone -s s1 me/private-repo            # uses GH_TOKEN or your gh login
+colab forward -s s1 7860                     # http://localhost:7860, only for you
+colab share -s s1 7860                       # public https://...trycloudflare.com
+colab share -s s1 7860 --via ngrok           # needs NGROK_AUTHTOKEN
+```
+
+The Colab backend only counts kernel activity as use, so `colab forward`, `colab ssh -L` and `colab share` keep the runtime alive while they run. See [docs/07_secrets_tunnels_integrations.md](docs/07_secrets_tunnels_integrations.md).
 
 ### Global Options
 * `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `adc`).
