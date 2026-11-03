@@ -1,8 +1,9 @@
 name: Release
 
-# Push a tag such as v0.7.5.1 to publish a GitHub Release with the wheel and
-# sdist. The wheel is pure Python (py3-none-any), so one file installs on
-# Linux, macOS and Windows:
+# Push a tag such as v0.7.5.2 to publish a GitHub Release with the wheel, the
+# sdist and standalone `colab` binaries for Linux, Windows and macOS (built
+# with PyInstaller; no Python needed). The wheel is pure Python
+# (py3-none-any), so one file installs on Linux, macOS and Windows:
 #   uv tool install https://github.com/<owner>/<repo>/releases/download/vX.Y.Z/<wheel>
 on:
   push:
@@ -76,9 +77,81 @@ jobs:
             "$bin/colab" "$cmd" --help > /dev/null
           done
 
+  binaries:
+    name: Standalone binary (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: windows-latest
+            label: windows-x64
+          # Intel macOS: macOS arm64 runners are often unavailable; the x64
+          # binary also runs on Apple silicon through Rosetta 2.
+          - os: macos-15-intel
+            label: macos-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      # cryptography has no macOS x64 wheel, so uv builds it from source.
+      # Linked dynamically, it needs Homebrew's libssl.3.dylib, but PyInstaller
+      # bundles Python's older libssl.3.dylib of the same name, and the binary
+      # fails with "Symbol not found: _SSL_get0_group_name". Link OpenSSL
+      # statically instead, and skip the uv cache so no dynamically linked
+      # build is reused.
+      - name: Static OpenSSL for cryptography (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "UV_NO_CACHE=1" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: cryptography must not link a libssl dylib (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          so=$(uv run python -c "import cryptography.hazmat.bindings._rust as m; print(m.__file__)")
+          otool -L "$so"
+          if otool -L "$so" | grep -q libssl; then echo "cryptography links libssl dynamically"; exit 1; fi
+
+      - name: Build the colab binary with PyInstaller
+        shell: bash
+        run: |
+          name="colab-${GITHUB_REF_NAME#v}-${{ matrix.label }}"
+          uv run --with pyinstaller==6.22.3 python packaging/build_binary.py "$name"
+          echo "BIN_NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Run the binary
+        shell: bash
+        run: |
+          bin="dist/bin/$BIN_NAME"
+          if [ "$RUNNER_OS" = "Windows" ]; then bin="$bin.exe"; fi
+          "$bin" version | grep -F "${GITHUB_REF_NAME#v}"
+          "$bin" readme | head -1 | grep -F "Colab CLI"
+          for cmd in secret hf clone forward share keepalive ssh exec run stop; do
+            "$bin" "$cmd" --help > /dev/null
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.label }}
+          path: dist/bin/
+
   publish:
     name: Publish GitHub Release
-    needs: smoke
+    needs: [smoke, binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +160,12 @@ jobs:
         with:
           name: dist
           path: dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/
+          merge-multiple: true
 
       - name: Release notes from CHANGELOG.md
         shell: bash

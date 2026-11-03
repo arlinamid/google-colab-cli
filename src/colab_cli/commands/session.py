@@ -322,13 +322,81 @@ def status(
         _print_status_for(s)
 
 
+def _stop_orphans(yes: bool) -> None:
+    """Unassigns server-side runtimes that have no local session (``[?]``).
+
+    They keep using compute units until the backend reclaims them. They are
+    listed and confirmed first: an orphan may also be a runtime opened in
+    the Colab web UI or by colab on another machine.
+    """
+    from colab_cli.common import state
+
+    sessions, assignments = state.sync_sessions()
+    known = {s.endpoint for s in sessions.values()}
+    orphans = [a for a in assignments if a.endpoint not in known]
+    if not orphans:
+        typer.echo("[colab] No orphaned runtimes.")
+        return
+
+    typer.echo(f"[colab] {len(orphans)} runtime(s) on the server have no local session:")
+    for a in orphans:
+        typer.echo(
+            "  "
+            + _format_session_line(
+                name="?",
+                endpoint=a.endpoint,
+                accelerator=a.accelerator.value,
+                variant=a.variant.name,
+                machine_shape=a.machine_shape.name,
+            )
+        )
+    typer.echo(
+        "[colab] These may include runtimes opened in the Colab web UI or by "
+        "colab on another machine; stopping ends them there too."
+    )
+    if not yes and not typer.confirm("[colab] Stop them?", default=False):
+        typer.echo("[colab] Nothing stopped.")
+        return
+
+    failed = 0
+    for a in orphans:
+        try:
+            state.client.unassign(a.endpoint)
+            typer.echo(f"[colab] Stopped {a.endpoint}.")
+        except Exception as e:  # Keep going: stop as many as possible.
+            failed += 1
+            typer.echo(f"[colab] Failed to stop {a.endpoint}: {e}", err=True)
+    if failed:
+        raise typer.Exit(code=1)
+
+
 def stop(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
+    orphans: Annotated[
+        bool,
+        typer.Option(
+            "--orphans",
+            help=(
+                "Stop server-side runtimes that have no local session (shown as "
+                "[?] by `colab sessions`), after listing them and asking."
+            ),
+        ),
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="With --orphans: do not ask.")
+    ] = False,
 ):
-    """Stop a session"""
+    """Stop a session, or with --orphans the runtimes no local session knows"""
     from colab_cli.common import state
+
+    if orphans:
+        if session:
+            typer.echo("[colab] Use either -s NAME or --orphans, not both.", err=True)
+            raise typer.Exit(code=2)
+        _stop_orphans(yes)
+        return
 
     name = state.resolve_session(session)
     s = state.get_session(name, ignore_missing_session=True)

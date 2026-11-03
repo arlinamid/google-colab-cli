@@ -134,7 +134,7 @@ def test_ssh_cmd_proxy_child_tags_handshake_with_cmd_mode(mocker):
     call = mocker.patch("subprocess.call", return_value=0)
     ssh_module._run_remote_command(_make_session(), None, ["true"])
     args = call.call_args.args[0]
-    child = shlex.split(args[args.index("-o") + 1].split("=", 1)[1])
+    child = shlex.split(next(a for a in args if a.startswith("ProxyCommand=")).split("=", 1)[1])
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
     connect = mocker.patch(
         "websocket.WebSocket.connect", side_effect=ConnectionRefusedError
@@ -176,6 +176,8 @@ def test_ssh_cmd_with_closed_stdio_runs_without_pty(mocker):
 
 @pytest.mark.parametrize("extra", [[], ["--"]], ids=["no-cmd", "bare-dashes"])
 def test_ssh_without_cmd_builds_interactive_argv(mocker, extra):
+    # A person at a terminal (otherwise ssh also gets -o BatchMode=yes).
+    mocker.patch("colab_cli.secrets._can_prompt", return_value=True)
     call = mocker.patch("subprocess.call", return_value=0)
     assert runner.invoke(app, ["ssh", "-s", "s1", *extra]).exit_code == 0
     proxy = [sys.executable, "-m", "colab_cli.cli", "ssh", "--proxy-mode"]

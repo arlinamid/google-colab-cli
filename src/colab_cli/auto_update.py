@@ -178,8 +178,17 @@ def _is_uv_tool_install() -> bool:
     return "/uv/tools/" in sys.executable.replace("\\", "/")
 
 
+def _is_standalone_binary() -> bool:
+    """True for the PyInstaller-built `colab` binary (no pip or uv inside)."""
+    import sys
+
+    return bool(getattr(sys, "frozen", False))
+
+
 def _get_install_command(wheel_url: Optional[str]) -> str:
     """Return the command that installs the fork's release wheel."""
+    if _is_standalone_binary():
+        return f"download the new colab binary from {RELEASES_PAGE}"
     if not wheel_url:
         return f"see {RELEASES_PAGE}"
     if _is_uv_tool_install():
@@ -298,6 +307,14 @@ def run_background_check() -> None:
 def self_install() -> None:
     """Install the fork's latest release wheel in place, detecting uv vs pip."""
     import sys
+
+    if _is_standalone_binary():
+        typer.echo(
+            "[colab] This is the standalone colab binary; it cannot replace "
+            f"itself. Download the new one from {RELEASES_PAGE}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     wheel_url = state.settings_store.load().latest_wheel_url
     if not wheel_url:

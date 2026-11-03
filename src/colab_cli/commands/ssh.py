@@ -50,6 +50,7 @@ from typing import Callable, List, Optional, Sequence
 from urllib.parse import urlparse
 import uuid
 
+from colab_cli import secrets as colab_secrets
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.commands import execution
@@ -72,6 +73,115 @@ _SSH_MODES = ("interactive", _DEFAULT_SSH_MODE, _CMD_SSH_MODE)
 _MAX_SSH_SESSIONS = 5
 
 
+_CONNECT_TIMEOUT_SEC = 30
+# Handle of the kill-on-close job this process is in (Windows); kept open for
+# the life of the process. See _kill_children_with_this_process.
+_JOB_HANDLE = None
+
+# Set by the colab process that starts ssh, for its ProxyCommand child:
+# whether a person can answer a passphrase prompt. The child's stdin is the ssh
+# pipe, so it cannot tell by itself; getpass would wait forever without one.
+_CAN_PROMPT_ENV = "COLAB_CLI_SSH_CAN_PROMPT"
+
+
+def _openssh_tool(name: str) -> str:
+    """The OpenSSH executable to run: Windows OpenSSH on Windows, else PATH.
+
+    The ProxyCommand is quoted for Windows OpenSSH, which starts it with
+    CreateProcess. Under Git Bash the first ``ssh`` on PATH is MSYS ssh, which
+    runs it through /bin/bash and strips the backslashes from the python path
+    ("exec: C:Users...python.exe: not found").
+    """
+    if sys.platform == "win32":
+        path = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            "System32",
+            "OpenSSH",
+            f"{name}.exe",
+        )
+        if os.path.isfile(path):
+            return path
+    return name
+
+
+def _kill_children_with_this_process() -> None:
+    """Windows: make ssh and its ProxyCommand die with this colab process.
+
+    Windows does not end child processes with their parent, so a colab that
+    was killed (a closed terminal tab, a stopped tool) left ssh.exe and its
+    proxy running. Putting this process in a job object with
+    KILL_ON_JOB_CLOSE makes the system end every process started after it
+    when the last handle closes, which happens when this process exits in
+    any way. POSIX shells already send SIGHUP to the whole job.
+    """
+    global _JOB_HANDLE
+    if sys.platform != "win32" or _JOB_HANDLE is not None:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+            )]
+
+        class _ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimits),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = _ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+        extended_limit_information = 9
+        if kernel32.SetInformationJobObject(
+            wintypes.HANDLE(job),
+            extended_limit_information,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ) and kernel32.AssignProcessToJobObject(
+            wintypes.HANDLE(job), wintypes.HANDLE(kernel32.GetCurrentProcess())
+        ):
+            _JOB_HANDLE = job
+        else:
+            kernel32.CloseHandle(wintypes.HANDLE(job))
+    except Exception:  # Best effort: never block ssh over cleanup.
+        pass
+
+
+def _can_prompt_for_passphrase() -> bool:
+    """True if a person can answer a passphrase prompt in this process."""
+    flag = os.environ.get(_CAN_PROMPT_ENV)
+    if flag is not None:
+        return flag == "1"
+    return colab_secrets._can_prompt()
+
+
 def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProcess:
     """Runs ``ssh-keygen -y`` to print the public key of ``identity``.
 
@@ -86,7 +196,7 @@ def _run_ssh_keygen(identity: str, passphrase: str) -> subprocess.CompletedProce
       FileNotFoundError: If ssh-keygen is not installed.
     """
     return subprocess.run(
-        ["ssh-keygen", "-y", "-f", identity, "-P", passphrase],
+        [_openssh_tool("ssh-keygen"), "-y", "-f", identity, "-P", passphrase],
         check=True,
         capture_output=True,
         text=True,
@@ -109,6 +219,8 @@ def _derive_with_passphrase_prompt(identity: str) -> subprocess.CompletedProcess
         (exit code 2).
     """
     try:
+        if not _can_prompt_for_passphrase():
+            raise EOFError
         passphrase = getpass.getpass(
             f"[colab] Passphrase for {identity}: ", stream=sys.stderr
         )
@@ -438,7 +550,11 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
     agent = COLAB_CLIENT_AGENT_HEADER
     header = [f"{_PUBKEY_HEADER}: {pubkey}", f"{agent['key']}: {agent['value']}"]
     try:
-        ws.connect(url, header=header)
+        # Bounded, so an unanswered handshake cannot leave the ProxyCommand
+        # (and the ssh above it) waiting forever. The timeout stays on the
+        # socket, so lift it: an idle ssh session must not time out.
+        ws.connect(url, header=header, timeout=_CONNECT_TIMEOUT_SEC)
+        ws.settimeout(None)
         return ws
     except websocket.WebSocketBadStatusException as e:
         status = getattr(e, "status_code", None)
@@ -526,7 +642,12 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
     """
     from colab_cli.common import state
 
-    argv = [sys.executable, "-m", "colab_cli.cli"]
+    if getattr(sys, "frozen", False):
+        # The standalone binary (PyInstaller) has no separate Python to run
+        # `-m colab_cli.cli` with; the binary itself is the CLI.
+        argv = [sys.executable]
+    else:
+        argv = [sys.executable, "-m", "colab_cli.cli"]
     if state.auth_provider is not AuthProvider.OAUTH2:
         argv += ["--auth", state.auth_provider.value]
     if state.config_path:
@@ -583,7 +704,7 @@ def _ssh_base_args(
     running without a forward that failed to bind (port already in use).
     """
     args = [
-        "ssh",
+        _openssh_tool("ssh"),
         "-o",
         f"ProxyCommand={proxy_command}",
         "-o",
@@ -608,11 +729,19 @@ def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
     The backend only counts kernel activity as use, so a forward alone would
     let the runtime idle out; ``keep_alive`` pings from this process.
     """
+    # Without a person at a terminal, nothing may prompt: tell the ProxyCommand
+    # child (which derives the public key), and keep ssh itself from asking
+    # for a key passphrase (BatchMode) instead of waiting forever.
+    can_prompt = colab_secrets._can_prompt()
+    env = {**os.environ, _CAN_PROMPT_ENV: "1" if can_prompt else "0"}
+    _kill_children_with_this_process()
+    if not can_prompt:
+        args = [args[0], "-o", "BatchMode=yes", *args[1:]]
     if not keep_alive:
-        return subprocess.call(args)
+        return subprocess.call(args, env=env)
     from colab_cli.common import state
 
-    proc = subprocess.Popen(args)
+    proc = subprocess.Popen(args, env=env)
     return wait_with_keep_alive(proc, state.client, session.endpoint)
 
 
