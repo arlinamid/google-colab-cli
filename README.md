@@ -11,6 +11,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 > * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
 > * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit and interrupts the kernel when set.
 > * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
+> * **Updates:** `colab update` offers and installs this fork's releases; a newer Google release is only announced, so an update never replaces the fork with Google's package.
 >
 > Versions are numbered after the Google release they are based on: **0.7.5.N** is Google's 0.7.5 plus this fork's changes. Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's). See [CHANGELOG.md](CHANGELOG.md).
 
