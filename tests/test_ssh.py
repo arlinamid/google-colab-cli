@@ -591,7 +591,7 @@ def test_ssh_interactive_mode_calls_ssh_subprocess(mock_common_state, mocker):
 
     result = runner.invoke(app, ["ssh", "-s", "s1"])
     assert result.exit_code == 0
-    interactive.assert_called_once_with(sess, None)
+    interactive.assert_called_once_with(sess, None, [], False)
     bridge.assert_not_called()
 
 

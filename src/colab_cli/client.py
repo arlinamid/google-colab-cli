@@ -41,6 +41,13 @@ COLAB_CLIENT_AGENT_HEADER = {
     "value": "colab-cli",
 }
 COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
+# Marks a request as one that should be resolved through the Colab tunnel
+# (Tunnel Frontend). Required by TFE-intercepted paths such as the keep-alive
+# ping; without it the front-door rejects the request with HTTP 400.
+COLAB_TUNNEL_HEADER = {"key": "X-Colab-Tunnel", "value": "Google"}
+# TFE records the activity as soon as the request arrives, so there is no
+# need to wait long for the (often non-responding) VM.
+KEEP_ALIVE_TIMEOUT = 10
 
 
 @dataclass
@@ -262,6 +269,25 @@ class Client:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assignments")
         assignments = self._issue_request(url, schema=ListedAssignments)
         return assignments.assignments
+
+    def keep_alive_assignment(self, endpoint: str):
+        """Refreshes the idle timer for the given assignment endpoint.
+
+        The backend only counts kernel activity as use, so traffic through an
+        ssh forward or a tunnel does not keep the runtime alive on its own.
+        TFE notes the activity as soon as the request arrives, then forwards it
+        to the VM, which does not always respond on this path: a read timeout
+        is therefore success, and only an HTTP error (e.g. 404 for a deleted
+        assignment) is raised.
+        """
+        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/{endpoint}/keep-alive/")
+        headers = {COLAB_TUNNEL_HEADER["key"]: COLAB_TUNNEL_HEADER["value"]}
+        try:
+            return self._issue_request(
+                url, method="GET", headers=headers, timeout=KEEP_ALIVE_TIMEOUT
+            )
+        except requests.exceptions.ReadTimeout:
+            return None
 
     def unassign(self, endpoint: str):
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")

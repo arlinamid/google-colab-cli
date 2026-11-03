@@ -410,3 +410,25 @@ def test_client_assign_url_omits_shape_for_standard(client, mock_session):
 )
 def test_resolve_assign_shape(accelerator, high_mem, expected):
     assert resolve_assign_shape(accelerator, high_mem=high_mem) == expected
+
+
+def test_client_keep_alive_pings_tunnel_frontend(client, mock_session):
+    resp = MagicMock()
+    resp.ok = True
+    resp.text = ""
+    mock_session.request.return_value = resp
+
+    client.keep_alive_assignment("ep1")
+
+    args, kwargs = mock_session.request.call_args
+    assert args[0] == "GET"
+    assert args[1].endswith("/tun/m/ep1/keep-alive/")
+    assert kwargs["headers"]["X-Colab-Tunnel"] == "Google"
+    assert kwargs["timeout"] > 0
+
+
+def test_client_keep_alive_read_timeout_is_success(client, mock_session):
+    import requests
+
+    mock_session.request.side_effect = requests.exceptions.ReadTimeout()
+    assert client.keep_alive_assignment("ep1") is None

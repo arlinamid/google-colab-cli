@@ -106,7 +106,7 @@ def test_bare_ssh_session_resolution(
 
     if expect_ok:
         assert result.exit_code == 0
-        interactive.assert_called_once_with(sess, None)
+        interactive.assert_called_once_with(sess, None, [], False)
     else:
         assert result.exit_code != 0
         interactive.assert_not_called()

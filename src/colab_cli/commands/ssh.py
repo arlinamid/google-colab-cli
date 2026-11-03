@@ -46,13 +46,14 @@ import signal
 import subprocess
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Sequence
 from urllib.parse import urlparse
 import uuid
 
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.commands import execution
+from colab_cli.keepalive import wait_with_keep_alive
 from colab_cli.state import SessionState
 import typer
 from typing_extensions import Annotated
@@ -543,8 +544,44 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
     return command.replace("%", "%%")
 
 
-def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
-    """Builds the shared ``ssh`` invocation (ProxyCommand + hardening)."""
+def _parse_forward(spec: str) -> str:
+    """Turns ``PORT``, ``LOCAL:REMOTE`` or ``LOCAL:HOST:REMOTE`` into an ``-L`` value.
+
+    The remote host defaults to ``localhost`` on the runtime.
+
+    Raises:
+      typer.Exit: On a malformed spec or a port outside 1-65535 (exit code 2).
+    """
+    parts = spec.split(":")
+    if len(parts) == 1:
+        parts = [parts[0], "localhost", parts[0]]
+    elif len(parts) == 2:
+        parts = [parts[0], "localhost", parts[1]]
+    if len(parts) != 3 or not parts[1]:
+        typer.echo(
+            f"[colab] Invalid forward {spec!r}. Use PORT, LOCAL:REMOTE or "
+            "LOCAL:HOST:REMOTE.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    for port in (parts[0], parts[2]):
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            typer.echo(
+                f"[colab] Invalid port in forward {spec!r}: expected 1-65535.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    return ":".join(parts)
+
+
+def _ssh_base_args(
+    proxy_command: str, identity: Optional[str], forwards: Sequence[str] = ()
+) -> list[str]:
+    """Builds the shared ``ssh`` invocation (ProxyCommand + hardening).
+
+    ``forwards`` are ready ``-L`` values; with any, ssh exits instead of
+    running without a forward that failed to bind (port already in use).
+    """
     args = [
         "ssh",
         "-o",
@@ -558,10 +595,54 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
     ]
     if identity:
         args.extend(["-i", os.path.expanduser(identity)])
+    if forwards:
+        args.extend(["-o", "ExitOnForwardFailure=yes"])
+        for fwd in forwards:
+            args.extend(["-L", fwd])
     return args
 
 
-def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
+def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
+    """Runs ssh and returns its exit code, pinging keep-alive while it runs.
+
+    The backend only counts kernel activity as use, so a forward alone would
+    let the runtime idle out; ``keep_alive`` pings from this process.
+    """
+    if not keep_alive:
+        return subprocess.call(args)
+    from colab_cli.common import state
+
+    proc = subprocess.Popen(args)
+    return wait_with_keep_alive(proc, state.client, session.endpoint)
+
+
+def _run_forward_only(
+    session: SessionState,
+    identity: Optional[str],
+    forwards: Sequence[str],
+    keep_alive: bool,
+) -> int:
+    """Holds the forwards open with ``ssh -N`` (no shell) until Ctrl+C."""
+    ssh_args = _ssh_base_args(
+        _proxy_command(session, identity, "interactive"), identity, forwards
+    )
+    ssh_args.extend(["-N", _SSH_HOST])
+    for fwd in forwards:
+        local, host, remote = fwd.split(":")
+        typer.echo(f"[colab] Forwarding http://localhost:{local} -> {host}:{remote} on '{session.name}'")
+    typer.echo(
+        "[colab] Press Ctrl+C to stop."
+        + (" The runtime is kept alive meanwhile." if keep_alive else "")
+    )
+    return _call_ssh(ssh_args, session, keep_alive)
+
+
+def _run_interactive_ssh(
+    session: SessionState,
+    identity: Optional[str],
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
+) -> int:
     """Spawns an interactive ``ssh`` that uses this CLI as its ProxyCommand.
 
     The subprocess connects to the abstract host ``colab-runtime``; its
@@ -581,18 +662,22 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
       The exit code of the ``ssh`` subprocess.
     """
     ssh_args = _ssh_base_args(
-        _proxy_command(session, identity, "interactive"), identity
+        _proxy_command(session, identity, "interactive"), identity, forwards
     )
     ssh_args.append("-t")
     ssh_args.append(_SSH_HOST)
     ssh_args.append(
         f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; exec ${{SHELL:-/bin/bash}} -l"
     )
-    return subprocess.call(ssh_args)
+    return _call_ssh(ssh_args, session, keep_alive)
 
 
 def _run_remote_command(
-    session: SessionState, identity: Optional[str], cmd: list[str]
+    session: SessionState,
+    identity: Optional[str],
+    cmd: list[str],
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
 ) -> int:
     """Runs CMD in ``/content`` over ``ssh`` and returns ssh's exit code.
 
@@ -608,13 +693,13 @@ def _run_remote_command(
       The exit code of the ``ssh`` subprocess.
     """
     proxy = _proxy_command(session, identity, _CMD_SSH_MODE)
-    ssh_args = _ssh_base_args(proxy, identity)
+    ssh_args = _ssh_base_args(proxy, identity, forwards)
     tty = execution.is_stdin_tty() and execution.is_stdout_tty()
     ssh_args.append("-t" if tty else "-T")
     ssh_args.append(_SSH_HOST)
     line = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
     ssh_args.append(f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; {line}")
-    return subprocess.call(ssh_args)
+    return _call_ssh(ssh_args, session, keep_alive)
 
 
 def _select_proxy_session(
@@ -753,7 +838,12 @@ def _run_proxy_bridge(
 
 
 def _run_interactive_shell(
-    s: SessionState, identity: Optional[str], created: bool, rm: bool
+    s: SessionState,
+    identity: Optional[str],
+    created: bool,
+    rm: bool,
+    forwards: Sequence[str] = (),
+    keep_alive: bool = False,
 ) -> int:
     """Runs the interactive ssh shell, honoring ``--rm`` on exit.
 
@@ -773,7 +863,7 @@ def _run_interactive_shell(
             err=True,
         )
     try:
-        return _run_interactive_ssh(s, identity)
+        return _run_interactive_ssh(s, identity, forwards, keep_alive)
     finally:
         if created and rm:
             _stop_session(s.name)
@@ -850,6 +940,34 @@ def ssh(
             ),
         ),
     ] = False,
+    forward: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "-L",
+            "--forward",
+            help=(
+                "Forward a local port to the runtime: PORT, LOCAL:REMOTE or "
+                "LOCAL:HOST:REMOTE (host defaults to localhost on the "
+                "runtime). Repeat for several ports. The runtime is kept "
+                "alive while the forward is open."
+            ),
+        ),
+    ] = None,
+    no_shell: Annotated[
+        bool,
+        typer.Option(
+            "-N",
+            "--no-shell",
+            help="With -L: only hold the forwards open, no shell (Ctrl+C stops).",
+        ),
+    ] = False,
+    no_keep_alive: Annotated[
+        bool,
+        typer.Option(
+            "--no-keep-alive",
+            help="With -L: do not ping keep-alive; the runtime may idle out.",
+        ),
+    ] = False,
     ssh_mode: Annotated[
         str, typer.Option("--colab-internal-mode", hidden=True)
     ] = _DEFAULT_SSH_MODE,
@@ -874,13 +992,26 @@ def ssh(
     if proxy_mode and cmd:
         typer.echo("[colab] --proxy-mode takes no command.", err=True)
         raise typer.Exit(code=2)
+    forwards = [_parse_forward(f) for f in forward or []]
+    keep_alive = bool(forwards) and not no_keep_alive
+    if no_shell and not forwards:
+        typer.echo("[colab] -N/--no-shell needs at least one -L forward.", err=True)
+        raise typer.Exit(code=2)
+    if proxy_mode and forwards:
+        typer.echo(
+            "[colab] -L ignored with --proxy-mode: set LocalForward in "
+            "~/.ssh/config instead.",
+            err=True,
+        )
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
         _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
         if rm:
             typer.echo("[colab] --rm ignored with -- CMD.", err=True)
-        raise typer.Exit(code=_run_remote_command(s, identity, cmd))
+        raise typer.Exit(
+            code=_run_remote_command(s, identity, cmd, forwards, keep_alive)
+        )
     if proxy_mode and ssh_mode == _CMD_SSH_MODE:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
@@ -892,9 +1023,50 @@ def ssh(
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
-    raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
+    if no_shell:
+        raise typer.Exit(code=_run_forward_only(s, identity, forwards, keep_alive))
+    raise typer.Exit(
+        code=_run_interactive_shell(s, identity, created, rm, forwards, keep_alive)
+    )
+
+
+def forward(
+    ports: Annotated[
+        List[str],
+        typer.Argument(
+            metavar="PORT...",
+            help="PORT, LOCAL:REMOTE or LOCAL:HOST:REMOTE, as for `colab ssh -L`.",
+        ),
+    ],
+    session: Annotated[
+        Optional[str], typer.Option("-s", "--session", help="Session name")
+    ] = None,
+    identity: Annotated[
+        Optional[str],
+        typer.Option("--identity", "-i", help="SSH private key, as for `colab ssh`."),
+    ] = None,
+    no_keep_alive: Annotated[
+        bool,
+        typer.Option(
+            "--no-keep-alive",
+            help="Do not ping keep-alive; the runtime may idle out.",
+        ),
+    ] = False,
+):
+    """Forward local ports to a runtime over ssh until Ctrl+C.
+
+    Same as ``colab ssh -s S -N -L PORT...``: open a Gradio, Streamlit,
+    Jupyter or TensorBoard server on the runtime at http://localhost:PORT.
+    Only your machine can reach it. The runtime is kept alive meanwhile.
+    """
+    forwards = [_parse_forward(p) for p in ports]
+    s = _resolve_session(session)
+    raise typer.Exit(
+        code=_run_forward_only(s, identity, forwards, not no_keep_alive)
+    )
 
 
 def register(app: typer.Typer):
     # Options after the first CMD word belong to CMD, not to `colab ssh`.
     app.command(context_settings={"allow_interspersed_args": False})(ssh)
+    app.command()(forward)
