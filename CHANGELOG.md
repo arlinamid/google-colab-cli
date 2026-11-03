@@ -10,6 +10,10 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.7.5.2] - 2026-11-03
+
+Still based on Google's Colab CLI 0.7.5.
+
 ### Added
 
 - **stop:** `colab stop --orphans` lists the server-side runtimes that have no local session (`[?]` in `colab sessions`) and stops them after asking (`--yes` to skip the question). They may include runtimes opened in the Colab web UI or on another machine, so nothing is stopped without that list.
@@ -128,6 +132,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.7.5.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.2
 [0.7.5.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.1
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.5.11...v0.6.0

@@ -42,10 +42,10 @@ Install this fork from its [GitHub release](https://github.com/arlinamid/google-
 
 ```bash
 # Using uv (recommended)
-uv tool install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.1/google_colab_cli-0.7.5.1-py3-none-any.whl
+uv tool install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.2/google_colab_cli-0.7.5.2-py3-none-any.whl
 
 # Using pip
-pip install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.1/google_colab_cli-0.7.5.1-py3-none-any.whl
+pip install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.2/google_colab_cli-0.7.5.2-py3-none-any.whl
 ```
 
 `uv tool install google-colab-cli` / `pip install google-colab-cli` install Google's official release from PyPI instead, without this fork's changes.
