@@ -20,6 +20,9 @@ below corresponds to a tag of the same name.
 - **ssh:** the proxy's WebSocket handshake gives up after 30 s instead of waiting forever; an open session has no time limit.
 - **ssh, windows:** `colab ssh` and `colab forward` work from Git Bash: they run Windows OpenSSH instead of the MSYS `ssh` first on PATH, which broke the ProxyCommand (`exec: C:Users...python.exe: not found`).
 - **ssh:** a passphrase-protected key no longer hangs `colab ssh`/`colab forward` when there is no terminal to ask on; it exits with a message instead.
+- **update:** on Windows, a CLI installed with `uv tool install` is now recognized, so the upgrade hint suggests `uv tool install --force <wheel>` instead of `pip`.
+- **release:** the release workflow no longer shows as failed when GitHub cannot provide a macOS runner; macOS is tested by CI on every push to main.
+- **ci:** macOS jobs run on `macos-15-intel` instead of `macos-latest` (macOS 26 arm64), whose runners often were not available, so macOS checks no longer stay pending or get cancelled.
 
 ## [0.7.5.1] - 2026-11-03
 
