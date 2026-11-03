@@ -101,10 +101,34 @@ jobs:
         with:
           python-version: "3.12"
 
+      # cryptography has no macOS x64 wheel, so uv builds it from source.
+      # Linked dynamically, it needs Homebrew's libssl.3.dylib, but PyInstaller
+      # bundles Python's older libssl.3.dylib of the same name, and the binary
+      # fails with "Symbol not found: _SSL_get0_group_name". Link OpenSSL
+      # statically instead, and skip the uv cache so no dynamically linked
+      # build is reused.
+      - name: Static OpenSSL for cryptography (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "UV_NO_CACHE=1" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: cryptography must not link a libssl dylib (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          so=$(uv run python -c "import cryptography.hazmat.bindings._rust as m; print(m.__file__)")
+          otool -L "$so"
+          if otool -L "$so" | grep -q libssl; then echo "cryptography links libssl dynamically"; exit 1; fi
+
       - name: Build the colab binary with PyInstaller
         shell: bash
         run: |
-          uv sync --locked
           name="colab-${GITHUB_REF_NAME#v}-${{ matrix.label }}"
           uv run --with pyinstaller==6.22.3 python packaging/build_binary.py "$name"
           echo "BIN_NAME=$name" >> "$GITHUB_ENV"
