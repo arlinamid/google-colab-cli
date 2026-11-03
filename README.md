@@ -4,6 +4,16 @@ A command-line interface for Google Colab. Provision high-performance CPU, GPU, 
 
 Designed to support seamless developer productivity, headless automation, and AI agent integrations.
 
+> [!IMPORTANT]
+> **This is a fork** of Google's [googlecolab/google-colab-cli](https://github.com/googlecolab/google-colab-cli), not the official release. It tracks Google's code and stays as close to it as possible; the differences are:
+>
+> * **Windows fixes:** `colab console` in PowerShell and cmd.exe, Drive mount consent, `colab edit` temp files and `$EDITOR` paths, piped `colab console` output, ssh `ProxyCommand` quoting.
+> * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
+> * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit and interrupts the kernel when set.
+> * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
+>
+> Versions are numbered after the Google release they are based on: **0.7.5.N** is Google's 0.7.5 plus this fork's changes. Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's). See [CHANGELOG.md](CHANGELOG.md).
+
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
@@ -27,15 +37,17 @@ Designed to support seamless developer productivity, headless automation, and AI
 
 ## Installation
 
-Install the package using `uv` (recommended) or standard `pip`:
+Install this fork from its [GitHub release](https://github.com/arlinamid/google-colab-cli/releases) using `uv` (recommended) or `pip`. The wheel is pure Python and works on Linux, macOS and Windows:
 
 ```bash
 # Using uv (recommended)
-uv tool install google-colab-cli
+uv tool install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.1/google_colab_cli-0.7.5.1-py3-none-any.whl
 
 # Using pip
-pip install google-colab-cli
+pip install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.1/google_colab_cli-0.7.5.1-py3-none-any.whl
 ```
+
+`uv tool install google-colab-cli` / `pip install google-colab-cli` install Google's official release from PyPI instead, without this fork's changes.
 
 ---
 

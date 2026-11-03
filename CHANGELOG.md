@@ -10,21 +10,9 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
-### Changed
+## [0.7.5.1] - 2026-11-03
 
-- **exec, run:** `--timeout` now defaults to no limit; a value interrupts the kernel when it is exceeded and exits 1 with one line. Before, code that ran longer than the old 30 s default could fail with `Timeout waiting for reply` after it had finished.
-
-### Added
-
-- **prompts:** `COLAB_CLI_PROMPT_FROM_STDIN=1` makes CLI prompts read their answer from stdin, for programs that drive the CLI and own the terminal.
-
-### Fixed
-
-- **windows:** non-ASCII scripts and output work in every Windows code page. `colab exec -f` and `colab run` read scripts like Python does (coding cookie or BOM, else UTF-8) instead of failing with `UnicodeDecodeError`, and redirected output and `colab.log` are UTF-8, so Japanese and other text no longer raises `UnicodeEncodeError` in a pipe or file.
-
-## [0.8.0] - 2026-11-03
-
-First release of the hybrid edition: Google's Colab CLI with Windows fixes and extra features on top.
+First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extra features on top. Versions are numbered 0.7.5.N to show the Google release they are based on.
 
 ### Changed
 
@@ -33,6 +21,7 @@ First release of the hybrid edition: Google's Colab CLI with Windows fixes and e
   SSH session limit, `colab ssh` now says the limit is reached (N of N sessions
   in use on the runtime) and that the limit depends on the Colab plan. A 429
   without a usable limit keeps the previous message.
+- **exec, run:** `--timeout` now defaults to no limit; a value interrupts the kernel when it is exceeded and exits 1 with one line. Before, code that ran longer than the old 30 s default could fail with `Timeout waiting for reply` after it had finished.
 
 ### Added
 
@@ -43,6 +32,7 @@ First release of the hybrid edition: Google's Colab CLI with Windows fixes and e
 - **hf:** `colab hf login` and `colab hf download REPO_ID` for Hugging Face on the runtime.
 - **clone:** `colab clone REPO [DEST]` clones `owner/name` or an https URL onto the runtime; private GitHub repositories use `GH_TOKEN`, `GITHUB_TOKEN` or the local `gh` login, and the token is not stored in the URL or `.git/config`.
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
+- **prompts:** `COLAB_CLI_PROMPT_FROM_STDIN=1` makes CLI prompts read their answer from stdin, for programs that drive the CLI and own the terminal.
 
 ### Fixed
 
@@ -53,6 +43,7 @@ First release of the hybrid edition: Google's Colab CLI with Windows fixes and e
 - **exec:** `colab exec` exits 1 when the code or a notebook cell raises; `--cells`, `--stop-on-error`, `--check` and `--check-only` select and pre-check notebook cells.
 - **sessions:** a running command reports a stopped session in one line instead of a traceback, and no longer puts a stopped session back into `sessions.json`.
 - **ssh:** a `%` in a session name or identity path no longer breaks the ProxyCommand; a passphrase-protected `--identity` key asks for its passphrase instead of hanging.
+- **windows:** non-ASCII scripts and output work in every Windows code page. `colab exec -f` and `colab run` read scripts like Python does (coding cookie or BOM, else UTF-8) instead of failing with `UnicodeDecodeError`, and redirected output and `colab.log` are UTF-8, so Japanese and other text no longer raises `UnicodeEncodeError` in a pipe or file.
 
 ## [0.7.1] - 2026-09-14
 
@@ -122,6 +113,6 @@ First release of the hybrid edition: Google's Colab CLI with Windows fixes and e
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
-[0.8.0]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0
+[0.7.5.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.1
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.5.11...v0.6.0
