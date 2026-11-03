@@ -10,6 +10,18 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Changed
+
+- **exec, run:** `--timeout` now defaults to no limit; a value interrupts the kernel when it is exceeded and exits 1 with one line. Before, code that ran longer than the old 30 s default could fail with `Timeout waiting for reply` after it had finished.
+
+### Added
+
+- **prompts:** `COLAB_CLI_PROMPT_FROM_STDIN=1` makes CLI prompts read their answer from stdin, for programs that drive the CLI and own the terminal.
+
+### Fixed
+
+- **windows:** non-ASCII scripts and output work in every Windows code page. `colab exec -f` and `colab run` read scripts like Python does (coding cookie or BOM, else UTF-8) instead of failing with `UnicodeDecodeError`, and redirected output and `colab.log` are UTF-8, so Japanese and other text no longer raises `UnicodeEncodeError` in a pipe or file.
+
 ## [0.8.0] - 2026-11-03
 
 First release of the hybrid edition: Google's Colab CLI with Windows fixes and extra features on top.

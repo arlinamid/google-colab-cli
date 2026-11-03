@@ -134,3 +134,27 @@ def test_run_undecodable_script_exits_2_before_assign(mock_common_state, tmp_pat
     result = runner.invoke(app, ["run", str(p)])
     assert result.exit_code == 2
     mock_common_state.client.assign.assert_not_called()
+
+
+def test_log_file_is_utf8(tmp_path, monkeypatch):
+    """colab.log gets every websocket message at DEBUG, Japanese code included."""
+    import logging
+
+    from colab_cli import common
+
+    monkeypatch.setattr(common.os.path, "expanduser", lambda p: str(tmp_path / "cfg"))
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        common.setup_logging(log_to_stderr=False)
+        new = [h for h in root.handlers if h not in before]
+        assert [h.encoding for h in new] == ["utf-8"]
+        logging.getLogger("t").debug(JA)
+        for h in new:
+            h.flush()
+        log = (tmp_path / "cfg" / "colab.log").read_text(encoding="utf-8")
+        assert JA in log
+    finally:
+        for h in [h for h in root.handlers if h not in before]:
+            root.removeHandler(h)
+            h.close()

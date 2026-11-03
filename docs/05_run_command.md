@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: `--timeout` defaults to no limit and interrupts the kernel when set. The script is read like Python source (coding cookie or BOM, else UTF-8) and checked before a VM is allocated, so an undecodable script costs no compute.
 2026-11-03: Documented `--env KEY=VALUE` and added `--secret NAME[=SOURCE]`: values read locally (env, env:VAR, prompt, hf-cli, gh-cli), resolved before the VM is allocated (a missing value exits 2 without spending compute), and written as `***` in the history log.
 2026-09-25: Removed keep-alive daemon spawning from session allocation and teardown. `--keep` remains supported and skips unassignment on completion.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
@@ -34,7 +35,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
 | `--high-mem` | bool | False | Same as `colab new --high-mem` — request high-RAM when supported. |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
-| `--timeout` | float | 30.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
+| `--timeout` | float | None | Interrupt the kernel and fail if the script runs longer than this many seconds. Default: no limit. |
 | `--env` | str (repeatable) | None | `KEY=VALUE` set in the kernel's `os.environ` before the script runs. Also accepted after `SCRIPT` (`colab run script.py --env K=V`), where it is not forwarded to `sys.argv`. |
 | `--secret` | str (repeatable) | None | `NAME[=SOURCE]` set like `--env`, but the value is read locally (SOURCE: `env` default, `env:VAR`, `prompt`, `hf-cli`, `gh-cli`), never taken from the command line, and logged as `***`. Must come before `SCRIPT`. Resolved before the VM is allocated. |
 
