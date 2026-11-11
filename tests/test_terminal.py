@@ -24,60 +24,12 @@ import sys
 import pytest
 
 from colab_cli.terminal import (
-    TerminalQueryFilter,
     enable_windows_virtual_terminal,
     join_argv,
     open_url_in_browser,
     read_controlling_line,
     split_windows_command_line,
-    translate_windows_key,
-    windows_raw_console,
 )
-
-
-# --- terminal query filter (piped `colab console`) ---------------------------
-
-# The queries tmux on the runtime sent when a piped console attached.
-TMUX_QUERIES = ["\x1b[c", "\x1b[>c", "\x1b[>q", "\x1b]10;?\x1b\\", "\x1b]11;?\x1b\\"]
-
-
-@pytest.mark.parametrize(
-    "query", TMUX_QUERIES + ["\x1b[0c", "\x1b[=c", "\x1b[6n", "\x1b]4;1;?\x07"]
-)
-def test_query_filter_drops_terminal_queries(query):
-    f = TerminalQueryFilter()
-    assert f.feed(f"before{query}after") == "beforeafter"
-    assert f.flush() == ""
-
-
-@pytest.mark.parametrize(
-    "keep",
-    [
-        "\x1b[0m",
-        "\x1b[1;31m",
-        "\x1b[?1049h",
-        "\x1b[2J\x1b[H",
-        "\x1b]0;window title\x07",
-        "\x1b[?61;6;7c",  # a DA1 *reply* is not a query
-    ],
-)
-def test_query_filter_keeps_other_sequences(keep):
-    f = TerminalQueryFilter()
-    assert f.feed(f"a{keep}b") + f.flush() == f"a{keep}b"
-
-
-def test_query_filter_handles_queries_split_across_chunks():
-    f = TerminalQueryFilter()
-    stream = "hello" + "".join(TMUX_QUERIES) + "\x1b[0mworld"
-    out = "".join(f.feed(stream[i : i + 3]) for i in range(0, len(stream), 3))
-    out += f.flush()
-    assert out == "hello\x1b[0mworld"
-
-
-def test_query_filter_flushes_incomplete_tail():
-    f = TerminalQueryFilter()
-    assert f.feed("done\x1b[") == "done"
-    assert f.flush() == "\x1b["
 
 
 # --- Windows command-line splitting (EDITOR) ---------------------------------
@@ -103,26 +55,6 @@ def test_split_windows_command_line_keeps_backslashes(cmd, argv):
 def test_split_windows_command_line_inverts_list2cmdline():
     argv = ["C:\\a b\\x.exe", "say \"hi\"", "a&b", "trailing\\"]
     assert split_windows_command_line(subprocess.list2cmdline(argv)) == argv
-
-
-@pytest.mark.parametrize(
-    ("first", "second", "expected"),
-    [
-        ("a", None, "a"),
-        ("\r", None, "\r"),  # Enter, same byte a POSIX raw tty produces
-        ("\x03", None, "\x03"),  # Ctrl-C must reach the remote shell
-        ("\x00", "H", "\x1b[A"),  # up
-        ("\xe0", "P", "\x1b[B"),  # down
-        ("\x00", "M", "\x1b[C"),  # right
-        ("\xe0", "K", "\x1b[D"),  # left
-        ("\x00", "G", "\x1b[H"),  # home
-        ("\xe0", "O", "\x1b[F"),  # end
-        ("\x00", "S", "\x1b[3~"),  # delete
-        ("\xe0", "Z", ""),  # unknown scan code is dropped, not forwarded raw
-    ],
-)
-def test_translate_windows_key(first, second, expected):
-    assert translate_windows_key(first, second) == expected
 
 
 def test_join_argv_posix_round_trips_through_shlex():
@@ -223,9 +155,3 @@ def test_open_url_macos_uses_open(mocker):
 def test_enable_virtual_terminal_noop_off_windows(mocker):
     mocker.patch("colab_cli.terminal.is_windows", return_value=False)
     assert enable_windows_virtual_terminal() is False
-
-
-def test_windows_raw_console_noop_off_windows(mocker):
-    mocker.patch("colab_cli.terminal.is_windows", return_value=False)
-    with windows_raw_console():
-        pass

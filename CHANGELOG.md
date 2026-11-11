@@ -10,6 +10,29 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+Now based on Google's Colab CLI 0.8.0.
+
+### Changed
+
+- **exec, run:** `--timeout` is now an idle limit: it fails only after that many seconds without output, so code that keeps printing is never cut off. The wait no longer polls the kernel library's busy loop (upstream #185). Unlike Google's CLI, the default is still no limit, and a timeout still interrupts the kernel so the code stops too.
+- **ssh:** `--identity/-i` accepts a public key (`.pub`) as well as a private key; the matching `.pub` file is read directly when present (upstream #225).
+- **auth:** `--auth=adc` no longer runs `gcloud config get-value project` on every command (upstream #218).
+
+### Added
+
+- **auth:** on Linux, a warning when the keyring collection is locked, so you know why the CLI is waiting on an unlock prompt (upstream #204).
+
+### Removed
+
+- **console:** **BREAKING:** `colab console` is removed, following Google's CLI (upstream #205). Use `colab ssh -s NAME` for an interactive shell and `colab ssh -s NAME -- CMD` for one command; where ssh can't work, pipe `!`-prefixed shell commands to `colab exec -s NAME`.
+
+### Fixed
+
+- **security:** the debug log, `sessions.json`, `settings.json` and session history files are created readable only by their owner, and older copies are tightened the next time the CLI uses them (upstream #196).
+- **security:** access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies are no longer written to the debug log. Logs from older versions may contain credentials and can be deleted (upstream #196).
+- **download:** notebooks downloaded as JSON are valid JSON again (upstream #232).
+- **new, run, ssh:** unknown `--gpu`/`--tpu` values are rejected with the supported list instead of silently picking A100 or v6e1 (upstream #211).
+
 ## [0.7.5.2] - 2026-11-03
 
 Still based on Google's Colab CLI 0.7.5.

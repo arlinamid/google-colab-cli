@@ -31,9 +31,10 @@ connect), ``--gpu/--tpu`` pick the accelerator for that auto-created runtime,
 and ``--rm`` stops the runtime when you disconnect.
 
 ``--identity/-i`` overrides the default key order (``~/.ssh/id_ed25519`` ->
-``id_ecdsa``); the public key is derived via ``ssh-keygen -y -f`` and sent in
-the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
-``id_rsa`` is not auto-selected.
+``id_ecdsa``); it accepts either a public key (``.pub``) or a private key path,
+reading the ``.pub`` file directly when present and falling back to
+``ssh-keygen -y -f`` to populate the ``X-Colab-Ssh-Pubkey`` header. RSA keys are
+rejected by the server, so ``id_rsa`` is not auto-selected.
 """
 
 import contextlib
@@ -292,9 +293,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -302,11 +301,14 @@ def _pubkey_from_identity(identity: str) -> str:
 def _resolve_pubkey(identity: Optional[str]) -> str:
     """Returns the public key for the ``X-Colab-Ssh-Pubkey`` header.
 
-    With ``identity``, derives it from that private key; otherwise scans
-    ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference order.
+    With ``identity``, reads the matching ``.pub`` file directly if present
+    (whether ``identity`` was passed with or without ``.pub``), falling back to
+    deriving it from the private key via ``_pubkey_from_identity``; otherwise
+    scans ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference
+    order.
 
     Args:
-      identity: Path to a private key, or None to scan ``~/.ssh``.
+      identity: Path to a public or private key, or None to scan ``~/.ssh``.
 
     Returns:
       The public key text to send verbatim in the header.
@@ -315,7 +317,18 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
       typer.Exit: If no usable key is found (exit code 2).
     """
     if identity:
-        return _pubkey_from_identity(identity)
+        expanded = Path(os.path.expanduser(identity))
+        if expanded.suffix == ".pub":
+            pub_path = expanded
+            priv_path = expanded.with_suffix("")
+        else:
+            priv_path = expanded
+            pub_path = expanded.with_suffix(".pub")
+        if pub_path.exists():
+            if pubkey := pub_path.read_text().strip():
+                return pubkey
+        target = str(priv_path) if priv_path.exists() else identity
+        return _pubkey_from_identity(target)
 
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     for name in _KEY_TYPES:
@@ -715,7 +728,12 @@ def _ssh_base_args(
         "LogLevel=ERROR",
     ]
     if identity:
-        args.extend(["-i", os.path.expanduser(identity)])
+        ssh_identity = os.path.expanduser(identity)
+        if ssh_identity.endswith(".pub"):
+            priv_path = ssh_identity.removesuffix(".pub")
+            if os.path.exists(priv_path):
+                ssh_identity = priv_path
+        args.extend(["-i", ssh_identity])
     if forwards:
         args.extend(["-o", "ExitOnForwardFailure=yes"])
         for fwd in forwards:
@@ -855,9 +873,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -1020,9 +1036,9 @@ def ssh(
             "--identity",
             "-i",
             help=(
-                "SSH private key whose public key is sent in the "
-                "X-Colab-Ssh-Pubkey header (default: first of "
-                "~/.ssh/id_ed25519, id_ecdsa)."
+                "SSH key (public `.pub` or private key path) whose public key "
+                "is sent in the X-Colab-Ssh-Pubkey header (default: first of "
+                "~/.ssh/id_ed25519.pub, id_ecdsa.pub)."
             ),
         ),
     ] = None,

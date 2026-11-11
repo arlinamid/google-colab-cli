@@ -17,6 +17,8 @@ import json
 import os
 from typing import Any, Dict, List
 
+from colab_cli.state import make_private, private_opener
+
 
 REDACTED = "***"
 
@@ -35,6 +37,8 @@ class HistoryLogger:
         self.log_dir = os.path.expanduser(log_dir)
         os.makedirs(self.log_dir, exist_ok=True)
         self._redactions: List[str] = []
+        for session_name in self.list_sessions():
+            make_private(self._get_log_path(session_name))
 
     def add_redaction(self, value: str) -> None:
         """Never write ``value`` (a secret) to the history; log ``***`` instead."""
@@ -80,7 +84,7 @@ class HistoryLogger:
         }
         if self._redactions:
             event = self._redact(event)
-        with open(log_path, "a", encoding="utf-8") as f:
+        with open(log_path, "a", encoding="utf-8", opener=private_opener) as f:
             f.write(json.dumps(event) + "\n")
 
     def list_sessions(self) -> List[str]:

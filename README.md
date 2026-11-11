@@ -7,9 +7,9 @@ Designed to support seamless developer productivity, headless automation, and AI
 > [!IMPORTANT]
 > **This is a fork** of Google's [googlecolab/google-colab-cli](https://github.com/googlecolab/google-colab-cli), not the official release. It tracks Google's code and stays as close to it as possible; the differences are:
 >
-> * **Windows fixes:** `colab console` in PowerShell and cmd.exe, Drive mount consent, `colab edit` temp files and `$EDITOR` paths, piped `colab console` output, ssh `ProxyCommand` quoting.
+> * **Windows fixes:** Drive mount consent, `colab edit` temp files and `$EDITOR` paths, `colab ssh`/`colab forward` from Git Bash (Windows OpenSSH), ssh `ProxyCommand` quoting.
 > * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
-> * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit and interrupts the kernel when set.
+> * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit, and when set it interrupts the kernel after that many seconds without output.
 > * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
 > * **Updates:** `colab update` offers and installs this fork's releases; a newer Google release is only announced, so an update never replaces the fork with Google's package.
 >
@@ -18,7 +18,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
-> **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). Interactive `colab console` uses the Windows console API on Windows (raw keystrokes and ANSI color). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.
+> **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.
 
 > [!TIP]
 > Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
@@ -28,7 +28,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 ## Key Features
 
 * **Instant VM Provisioning:** Spin up CPU, GPU (T4, L4, G4, H100, A100), or TPU (v5e1, v6e1) runtimes in seconds.
-* **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or raw TTY console shells.
+* **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or SSH shells (`colab ssh`).
 * **Ephemeral Job Runner (`colab run`):** Provision a fresh VM, execute a local script with forwarded arguments, retrieve output files, and automatically tear down the runtime in a single command.
 * **Activity-Based Liveness:** Sessions stay alive as long as the kernel is active, with the Colab backend automatically maintaining liveness.
 * **Seamless Workspace Automation:** Mount Google Drive, authenticate Google Cloud Platform (GCP) credentials, and install dependencies with high-performance `uv` package management.
@@ -97,8 +97,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] [--secret SPEC] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
-| `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
-| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
+| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
 | `colab share [-s NAME] PORT [--via cloudflared\|ngrok] [--detach]` | Share a runtime port at a public URL (keeps the runtime alive until Ctrl+C; `--list`, `--stop`) |
 
@@ -197,7 +196,7 @@ colab exec -s analysis -f report.ipynb --check --cells "Setup,4-6" --stop-on-err
 ## Usage Notes
 
 * **Machine shape:** Use `--high-mem` with `colab new`, `colab run`, or `colab ssh` (when auto-creating a runtime) to request a high-RAM machine shape. Requires Colab Pro or Pro+ entitlement for supported accelerators (CPU, T4, A100, etc.). L4 and TPU runtimes ignore this flag because they only offer one shape. Machine shape is shown in `colab sessions` and `colab status`.
-* **TTY Requirements:** The interactive commands `repl` and `console` require a local TTY. When running inside automated scripts or pipelines, make sure to pipe stdin (e.g., `echo "print(1)" | colab repl`) to trigger non-interactive execution modes. On Windows, `colab console` switches the console out of line-editing mode so arrow keys and Ctrl-C reach the remote shell; colors need virtual-terminal processing, which the CLI turns on for cmd.exe and Windows PowerShell.
+* **TTY Requirements:** `colab repl` and interactive `colab ssh` expect a local TTY. When running inside automated scripts or pipelines, pipe stdin to `colab repl` (e.g., `echo "print(1)" | colab repl`) to trigger its non-interactive mode, or run one-shot shell commands with `colab ssh -s NAME -- CMD` (e.g., `colab ssh -s NAME -- ls /content`); pass untrusted values as separate arguments (after `--` where the program accepts it), since a single argument is a remote shell line. `colab ssh` needs a local `ssh` client and key, so where it can't work (no client or key, a tool not on the minimal ssh environment's `PATH`, or the runtime's concurrent SSH connections in use), pipe the commands to `colab exec` with IPython's `!` prefix (e.g., `echo '!ls /content' | colab exec`); each `!` line is its own shell and IPython expands `{expr}` and `$name` in it, so start a multi-line script with `%%bash` and keep untrusted text out of `!` lines.
 * **Drive mount and multiple Google accounts:** `colab drivemount` prints a consent URL (and opens it in the browser when it can) and waits up to 10 minutes. On the account chooser, select the same account the CLI authenticated as (`colab whoami` / the `login_hint` in the URL). A browser that is signed into several accounts otherwise attributes the Drive session to the active account, and Colab rejects the mount with HTTP 400. `--authuser N` appends that index to the consent URL when the chooser keeps opening the wrong account.
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
 * **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.

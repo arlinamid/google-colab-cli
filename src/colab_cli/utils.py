@@ -18,6 +18,7 @@ import logging
 import sys
 import tempfile
 import tokenize
+import webbrowser
 
 from typing import Optional, Union
 
@@ -84,6 +85,20 @@ def is_terminal_error(e: Exception) -> bool:
     if "404" in err_msg or "401" in err_msg:
         return True
     return False
+
+
+def open_url_in_browser(url: str) -> bool:
+    """Open ``url`` in the user's default browser.
+
+    Returns ``True`` when a browser was launched and ``False`` when no opener
+    is available (headless SSH hosts, containers, CI) or the opener fails.
+    Callers must keep showing the URL so those environments can still complete
+    the flow manually.
+    """
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
 
 
 def print_kitty(image_bytes: bytes):
