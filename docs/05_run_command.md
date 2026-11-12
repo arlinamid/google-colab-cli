@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-12: `colab run --json` (before the script path; also `COLAB_CLI_JSON=1`): the script's output goes into one JSON record (with `error.location` mapped to the script line, past the payload prelude and a stripped shebang, `diagnosis` and `exit_code`) followed by a summary. The process exit code stays the script's; a lost session exits 3 and a timeout 4. See docs/08_agent_feedback.md.
 2026-11-11: Merged upstream v0.8.0: `--timeout` is now an idle limit (seconds without output, upstream #185); the hybrid keeps no limit as the default and interrupts the kernel on a timeout. Unknown `--gpu`/`--tpu` values are rejected (upstream #211).
 2026-11-03: `--timeout` defaults to no limit and interrupts the kernel when set. The script is read like Python source (coding cookie or BOM, else UTF-8) and checked before a VM is allocated, so an undecodable script costs no compute.
 2026-11-03: Documented `--env KEY=VALUE` and added `--secret NAME[=SOURCE]`: values read locally (env, env:VAR, prompt, hf-cli, gh-cli), resolved before the VM is allocated (a missing value exits 2 without spending compute), and written as `***` in the history log.
@@ -39,6 +40,8 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
 | `--timeout` | float | None | Fail after this many seconds without output, and interrupt the kernel so the script stops too. Code that keeps printing is never cut off. Default (and `0`): no limit. |
 | `--env` | str (repeatable) | None | `KEY=VALUE` set in the kernel's `os.environ` before the script runs. Also accepted after `SCRIPT` (`colab run script.py --env K=V`), where it is not forwarded to `sys.argv`. |
+| `--json` | bool | False | Print a JSON record for the script and a summary instead of the script's output (docs/08_agent_feedback.md). Must come before `SCRIPT`. Also `COLAB_CLI_JSON=1`. |
+| `--output-dir` | str | temp folder | With `--json`: where images are saved. |
 | `--secret` | str (repeatable) | None | `NAME[=SOURCE]` set like `--env`, but the value is read locally (SOURCE: `env` default, `env:VAR`, `prompt`, `hf-cli`, `gh-cli`), never taken from the command line, and logged as `***`. Must come before `SCRIPT`. Resolved before the VM is allocated. |
 
 ### Shebang usage

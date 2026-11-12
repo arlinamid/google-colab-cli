@@ -10,6 +10,10 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Added
+
+- **exec, run:** `--json` for scripts and AI agents: one JSON record per cell and a summary on stdout, other output on stderr. A failed cell's record gives the failing line in your local file or notebook cell, a diagnosis code (`missing_module`, `cuda_oom`, `no_gpu`, `disk_full`, `file_not_found`, `syntax_error`, `idle_timeout`, `session_lost`, ...) and the `colab` commands to try next. Exit codes: 1 code error, 3 lost session, 4 timeout; `run` keeps the script's own exit code. `COLAB_CLI_JSON=1` turns it on everywhere; `colab exec --json-stream` also streams output as it arrives; `--output-dir` sets where images are saved.
+
 ## [0.8.0.1] - 2026-11-12
 
 Now based on Google's Colab CLI 0.8.0. The version is Google's base version plus a fork release number, so Google's next release (0.8.1) still sorts above it.

@@ -94,8 +94,8 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Execution
 | Command | Description |
 | --- | --- |
-| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] [--secret SPEC] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
-| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
+| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] [--secret SPEC] [--json] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
+| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only] [--json \| --json-stream]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
@@ -199,6 +199,15 @@ colab exec -s analysis -f report.ipynb --check --cells "Setup,4-6" --stop-on-err
 * **TTY Requirements:** `colab repl` and interactive `colab ssh` expect a local TTY. When running inside automated scripts or pipelines, pipe stdin to `colab repl` (e.g., `echo "print(1)" | colab repl`) to trigger its non-interactive mode, or run one-shot shell commands with `colab ssh -s NAME -- CMD` (e.g., `colab ssh -s NAME -- ls /content`); pass untrusted values as separate arguments (after `--` where the program accepts it), since a single argument is a remote shell line. `colab ssh` needs a local `ssh` client and key, so where it can't work (no client or key, a tool not on the minimal ssh environment's `PATH`, or the runtime's concurrent SSH connections in use), pipe the commands to `colab exec` with IPython's `!` prefix (e.g., `echo '!ls /content' | colab exec`); each `!` line is its own shell and IPython expands `{expr}` and `$name` in it, so start a multi-line script with `%%bash` and keep untrusted text out of `!` lines.
 * **Drive mount and multiple Google accounts:** `colab drivemount` prints a consent URL (and opens it in the browser when it can) and waits up to 10 minutes. On the account chooser, select the same account the CLI authenticated as (`colab whoami` / the `login_hint` in the URL). A browser that is signed into several accounts otherwise attributes the Drive session to the active account, and Colab rejects the mount with HTTP 400. `--authuser N` appends that index to the consent URL when the chooser keeps opening the wrong account.
 * **Git Bash on Windows:** Git Bash rewrites arguments that look like POSIX paths, so `/content/x` reaches Windows programs as `C:/Program Files/Git/content/x`. `colab ls`, `rm`, `upload`, `download` and `edit` turn such remote paths back. For other commands that take remote paths, such as `colab ssh -s NAME -- ls /content`, run `MSYS_NO_PATHCONV=1 colab ...` or write `//content`.
+* **Results for AI agents (`--json`):** `colab exec --json` and `colab run --json` print one JSON record per cell and a summary on stdout (everything else goes to stderr). A failed cell's record names the failing line in your local file, a diagnosis code (e.g. `missing_module`, `cuda_oom`, `file_not_found`) and the `colab` commands to try next:
+
+  ```bash
+  $ echo 'import torchvision' | colab exec -s demo --json
+  {"schema": "colab.v1", "type": "cell", "status": "error", "error": {"ename": "ModuleNotFoundError", "location": {"file": "<stdin>", "line": 1, ...}, ...}, "diagnosis": {"code": "missing_module", "next_actions": [{"cmd": "colab install -s demo torchvision", "why": "install the missing package"}, ...]}, ...}
+  {"schema": "colab.v1", "type": "summary", "status": "error", "cells_run": 1, "cells_failed": 1, "exit_code": 1, ...}
+  ```
+
+  Exit codes: 1 code error, 3 lost session, 4 timeout (`run` keeps the script's own code). `COLAB_CLI_JSON=1` turns `--json` on everywhere; `--json-stream` also streams output events. See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
 * **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 

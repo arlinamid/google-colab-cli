@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-12: Implemented phase A: `src/colab_cli/diagnosis.py` (rules), `src/colab_cli/results.py` (records, line mapping, summary), `--json`/`--json-stream`/`--output-dir` on `exec` and `--json`/`--output-dir` on `run`. Differences from the first design: usage errors (exit 2) and failures before execution (e.g. a refused assign in `run`) still print text on stderr without JSON; `run` keeps the script's own exit code instead of the 0/1 table; `session` in a `run` record is null when the runtime is already stopped, so `next_actions` only name a session with `--keep`. Tracebacks are mapped from the real IPython 7 format Colab uses (`/tmp/ipykernel_N/M.py in <cell line: 0>()`, `---->` marker), plus SyntaxError and IPython 8 forms.
 2026-11-12: Initial design of the agent feedback loop (A-D): result envelope with diagnosis and next actions, detached jobs with progress, kernel inspection, and cost feedback. Design only; no code yet.
 ---
 
@@ -44,7 +45,7 @@ to them, so a later upstream merge stays a superset instead of a conflict.
 
 | Phase | Delivers | Depends on |
 |-------|----------|------------|
-| A | Result envelope, error diagnosis, `next_actions`, local line mapping | - |
+| A | Result envelope, error diagnosis, `next_actions`, local line mapping (**implemented**) | - |
 | B | `colab job` detached runs with progress, metrics and wait/stop | A |
 | C | `colab inspect` kernel and machine state | A |
 | D | Cost block, `--budget`, `colab usage --json` | A (B for budgets on jobs) |
