@@ -42,6 +42,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--env` | str (repeatable) | None | `KEY=VALUE` set in the kernel's `os.environ` before the script runs. Also accepted after `SCRIPT` (`colab run script.py --env K=V`), where it is not forwarded to `sys.argv`. |
 | `--json` | bool | False | Print a JSON record for the script and a summary instead of the script's output (docs/08_agent_feedback.md). Must come before `SCRIPT`. Also `COLAB_CLI_JSON=1`. |
 | `--output-dir` | str | temp folder | With `--json`: where images are saved. |
+| `--budget` | float | None | Stop the script once it has used about this many compute units (account hourly rate at start); exit 5, the runtime is still released. Must come before `SCRIPT`. |
 | `--secret` | str (repeatable) | None | `NAME[=SOURCE]` set like `--env`, but the value is read locally (SOURCE: `env` default, `env:VAR`, `prompt`, `hf-cli`, `gh-cli`), never taken from the command line, and logged as `***`. Must come before `SCRIPT`. Resolved before the VM is allocated. |
 
 ### Shebang usage

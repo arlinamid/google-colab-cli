@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-12: Implemented phases C and D. C: `colab inspect` (`commands/inspect.py`, kernel code in `inspect_vm.py`); the kernel state comes from `GET /api/kernels/<id>` first, the package list from `importlib.metadata` (no pip subprocess), the baseline in `/content/.colab-cli/packages-baseline.json` on the runtime. D: `cost.py` (`CostMeter`), `RunLimitExceeded` in the streaming loop for `exec`/`run --budget`, `max_seconds` in the job spec for `job start --budget`, `stop_reason` in job status, `colab usage --json`; the `--expect-hours` warning was dropped. Live: `integration/repro_inspect_cost/test.sh` (a 10 s budget at 0.08 CU/h stopped both a cell and a job).
 2026-11-12: Implemented phase B: `colab job start|status|tail|wait|stop|list` (`src/colab_cli/commands/job.py`, `jobs.py`, VM sources in `job_vm.py`). Differences from the first design: the start code embeds the files (base64) instead of a separate Contents API upload, so one kernel request starts a job; `stop` writes a `stop` file the runner polls (SIGTERM, SIGKILL after 10 s) instead of signalling from the kernel, so it works while the kernel is busy; `tail` reads `tail.txt` (last 200 lines); `list` reads only `status.json`, so it shows no diagnosis; `colab run --detach` is not implemented yet. Reclaim probe done (below): a runtime with a detached process and no client was kept for 100 minutes.
 2026-11-12: Implemented phase A: `src/colab_cli/diagnosis.py` (rules), `src/colab_cli/results.py` (records, line mapping, summary), `--json`/`--json-stream`/`--output-dir` on `exec` and `--json`/`--output-dir` on `run`. Differences from the first design: usage errors (exit 2) and failures before execution (e.g. a refused assign in `run`) still print text on stderr without JSON; `run` keeps the script's own exit code instead of the 0/1 table; `session` in a `run` record is null when the runtime is already stopped, so `next_actions` only name a session with `--keep`. Tracebacks are mapped from the real IPython 7 format Colab uses (`/tmp/ipykernel_N/M.py in <cell line: 0>()`, `---->` marker), plus SyntaxError and IPython 8 forms.
 2026-11-12: Initial design of the agent feedback loop (A-D): result envelope with diagnosis and next actions, detached jobs with progress, kernel inspection, and cost feedback. Design only; no code yet.
@@ -48,8 +49,8 @@ to them, so a later upstream merge stays a superset instead of a conflict.
 |-------|----------|------------|
 | A | Result envelope, error diagnosis, `next_actions`, local line mapping (**implemented**) | - |
 | B | `colab job` detached runs with progress, metrics and wait/stop (**implemented**) | A |
-| C | `colab inspect` kernel and machine state | A |
-| D | Cost block, `--budget`, `colab usage --json` | A (B for budgets on jobs) |
+| C | `colab inspect` kernel and machine state (**implemented**) | A |
+| D | Cost block, `--budget`, `colab usage --json` (**implemented**) | A (B for budgets on jobs) |
 
 Each phase is its own PR on top of `feat/agent-feedback`.
 

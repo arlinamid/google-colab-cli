@@ -82,6 +82,16 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - **Other**: `colab job tail -s <name> ID [-n 50] [--follow]`, `colab job stop -s <name> ID` (SIGTERM, SIGKILL after 10 s), `colab job list -s <name> [--json]`. Full output: `colab download -s <name> /content/.colab-jobs/ID/output.log out.log`.
 - **Loop for agents**: start, then poll `status --json` every few minutes; act on `stalled`, a falling/rising metric trend, or `state: failed` + `diagnosis.next_actions`; `stop` and restart with a fix if needed.
 
+### Look before you run (`colab inspect`)
+- `colab inspect -s <name> --json` (or `--vars`, `--gpu`, `--disk`, `--packages`, `--files PATH`) returns one `"type": "inspect"` record: `vars` (name, type, `len`, `shape`, `dtype`, `device`, `nbytes`; never values, so it is safe with secrets in variables), `gpu.devices` (nvidia-smi) and `gpu.torch` memory, `disk`/`memory` in GB, `packages` (`added`/`removed`/`changed` since the first inspect of that runtime) and `files`.
+- Use it to see what is already loaded instead of re-running setup, to check GPU memory after a `cuda_oom`, or disk after `disk_full`.
+- If `kernel` is `busy` (a long `exec` is running), the kernel sections are `{"skipped": "kernel busy"}`; `--files` still works. Jobs do not make the kernel busy.
+
+### Cost and budgets
+- `colab usage --json`: `balance_cu`, `rate_cu_per_hour` (all active runtimes together), `hours_left_at_rate`.
+- Every `--json` summary of `exec`/`run`, and `job status|wait --json`, has `cost`: `rate_cu_per_hour`, `balance_cu`, `used_cu_estimate` (rate x duration; high, never low, with several runtimes), `hours_left_at_rate`.
+- `--budget CU` on `exec`, `run` (before the script path) and `job start`: the run is stopped once the estimate reaches the budget. `exec`/`run` exit 5 with diagnosis `budget_reached`; a job ends `stopped` with `stop_reason: "budget"` (enforced on the runtime, so it works with no client connected). Set a budget for anything that could run away on a GPU.
+
 ### Automate
 - `colab auth -s <name>` — VM-side GCP creds, needed before in-VM GCS/BigQuery calls (interactive; not agent-runnable).
 - `colab drivemount -s <name> [--authuser N] [PATH]` — mounts Drive at `/content/drive` by default (interactive; not agent-runnable). The user must approve the printed consent URL in a browser as the same account `colab whoami` shows; a multi-account browser rejects the mount with HTTP 400 unless that account is the one selected on the chooser. The kernel waits 10 minutes, not 2.
