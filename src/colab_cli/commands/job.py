@@ -75,7 +75,9 @@ def _job_ids(files) -> List[str]:
         listing = files.list_dir(JOBS_DIR)
     except FileNotFoundError:
         return []
-    return sorted(i["name"] for i in listing.get("content", []) if i.get("type") == "directory")
+    ids = [i["name"] for i in listing.get("content", []) if i.get("type") == "directory"]
+    # Ids are <name>-YYYYMMDD-HHMMSS-xxxx: oldest first by their time stamp.
+    return sorted(ids, key=lambda i: (i.split("-")[-3:-1], i))
 
 
 def _resolve_job(files, job_id: Optional[str], session: str) -> str:
@@ -85,8 +87,7 @@ def _resolve_job(files, job_id: Optional[str], session: str) -> str:
     if not ids:
         typer.echo(f"[colab] No jobs on session '{session}'.", err=True)
         raise typer.Exit(1)
-    # Ids are <name>-YYYYMMDD-HHMMSS-xxxx: the newest has the latest stamp.
-    return max(ids, key=lambda i: i.split("-")[-3:-1])
+    return ids[-1]
 
 
 def _read_status(files, job_id: str, session: str) -> dict:
@@ -379,7 +380,7 @@ def list_jobs(
             status_ = json.loads(files.read_text(f"{JOBS_DIR}/{job_id}/status.json"))
         except (FileNotFoundError, ValueError):
             continue
-        rec = job_record(status_, metrics=[], tail="", now=time.time(),
+        rec = job_record(status_, metrics=[], tail=None, now=time.time(),
                          stall_after=stall_after, session=session_name)
         if emitter:
             emitter.emit(rec)

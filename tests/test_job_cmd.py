@@ -234,3 +234,15 @@ def test_newest_job_is_by_time_not_by_name(files):
     result = runner.invoke(app, ["job", "status", "-s", "s1", "--json"])
 
     assert json.loads(result.stdout)["id"] == "alpha-20261112-090000-0000"
+
+
+def test_list_is_in_time_order_without_guessing_diagnoses(files):
+    _put_job(files, "train-20261112-090000-0000", state="succeeded", exit_code=0, ended_at=1050.0)
+    _put_job(files, "bash-20261112-091000-0000", state="failed", exit_code=1, ended_at=1060.0)
+
+    result = runner.invoke(app, ["job", "list", "-s", "s1", "--json"])
+
+    recs = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [r["id"] for r in recs] == ["train-20261112-090000-0000", "bash-20261112-091000-0000"]
+    # list reads only status.json, so it cannot know why a job failed.
+    assert recs[1]["diagnosis"] is None

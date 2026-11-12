@@ -161,7 +161,7 @@ def job_record(
     status: Dict[str, Any],
     *,
     metrics: List[Dict[str, Any]],
-    tail: str,
+    tail: Optional[str],
     now: float,
     stall_after: float,
     session: Optional[str],
@@ -177,7 +177,7 @@ def job_record(
     silent = (now - last_output) if running and last_output else None
     stalled = bool(running and silent is not None and silent > stall_after)
     diagnosis = None
-    if state == "failed":
+    if state == "failed" and tail is not None:  # None: the output was not read
         diagnosis = diagnose_log(tail, session=session, file=file)
     elif stalled:
         diagnosis = _stalled(status.get("id"), session, silent)
