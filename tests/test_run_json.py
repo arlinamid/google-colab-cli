@@ -163,3 +163,49 @@ def test_timeout_is_exit_4_and_still_tears_down(runtime, tmp_path, mock_common_s
     assert cell["diagnosis"]["code"] == "idle_timeout"
     assert summary["exit_code"] == 4
     mock_common_state.client.unassign.assert_called_once()
+
+
+def _rate(mock_common_state, rate=2.0, balance=100.0):
+    from colab_cli.consumption import ConsumptionUserInfo
+
+    mock_common_state.client.get_consumption_user_info.return_value = ConsumptionUserInfo(
+        paidComputeUnitsBalance=balance, consumptionRateHourly=rate, assignmentsCount=1
+    )
+
+
+def test_run_summary_has_a_cost_block(runtime, tmp_path, mock_common_state):
+    _rate(mock_common_state)
+    script = tmp_path / "ok.py"
+    script.write_text("print(1)\n")
+    runtime.execute_code.return_value = []
+
+    result = runner.invoke(app, ["run", "--json", str(script)])
+
+    summary = _records(result)[-1]
+    assert summary["cost"]["rate_cu_per_hour"] == 2.0
+
+
+def test_run_budget_stops_with_exit_5_and_tears_down(runtime, tmp_path, mock_common_state):
+    from colab_cli.runtime import RunLimitExceeded
+
+    _rate(mock_common_state)
+    script = tmp_path / "long.py"
+    script.write_text("train()\n")
+    seen = {}
+
+    def execute(code, **kw):
+        if code.startswith(CHDIR):
+            return []
+        seen.update(kw)
+        raise RunLimitExceeded("The run limit of 1800s was reached. The kernel was interrupted.")
+
+    runtime.execute_code.side_effect = execute
+
+    result = runner.invoke(app, ["run", "--json", "--budget", "1", str(script)])
+
+    assert result.exit_code == 5
+    assert 1790 <= seen["run_limit"] <= 1800
+    cell, summary = _records(result)
+    assert cell["diagnosis"]["code"] == "budget_reached"
+    assert summary["exit_code"] == 5
+    mock_common_state.client.unassign.assert_called_once()

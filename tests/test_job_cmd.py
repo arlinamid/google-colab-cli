@@ -246,3 +246,29 @@ def test_list_is_in_time_order_without_guessing_diagnoses(files):
     assert [r["id"] for r in recs] == ["train-20261112-090000-0000", "bash-20261112-091000-0000"]
     # list reads only status.json, so it cannot know why a job failed.
     assert recs[1]["diagnosis"] is None
+
+
+def test_start_budget_sets_max_seconds(files, kernel, mock_common_state):
+    from colab_cli.consumption import ConsumptionUserInfo
+
+    mock_common_state.client.get_consumption_user_info.return_value = ConsumptionUserInfo(
+        paidComputeUnitsBalance=100.0, consumptionRateHourly=2.0, assignmentsCount=1
+    )
+
+    result = runner.invoke(app, ["job", "start", "-s", "s1", "--budget", "1", "--", "sleep 9999"])
+
+    assert result.exit_code == 0, result.output
+    assert "'max_seconds': 1800.0" in kernel.execute_code.call_args.args[0]
+
+
+def test_status_json_has_a_cost_estimate(files, mock_common_state):
+    from colab_cli.consumption import ConsumptionUserInfo
+
+    mock_common_state.client.get_consumption_user_info.return_value = ConsumptionUserInfo(
+        paidComputeUnitsBalance=100.0, consumptionRateHourly=3.6, assignmentsCount=1
+    )
+    _put_job(files, "j-20261112-090000-0000")  # started 1000, now 1100
+
+    result = runner.invoke(app, ["job", "status", "-s", "s1", "j-20261112-090000-0000", "--json"])
+
+    assert json.loads(result.stdout)["cost"]["used_cu_estimate"] == 0.1

@@ -68,7 +68,8 @@ from colab_cli.results import (
     build_summary,
     failure_record,
 )
-from colab_cli.runtime import ColabRuntime, SessionConnectionLost
+from colab_cli.cost import CostMeter
+from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
 
@@ -327,6 +328,17 @@ def run_command(
             help="With --json: where to save images (default: a new temp folder).",
         ),
     ] = None,
+    budget: Annotated[
+        Optional[float],
+        typer.Option(
+            "--budget",
+            help=(
+                "Stop the script once it has used about this many compute units, "
+                "estimated from the account's hourly rate at the start. Put it "
+                "before the script path. Exit code 5."
+            ),
+        ),
+    ] = None,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -452,6 +464,18 @@ def run_command(
             image_dir_used = output_dir or tempfile.mkdtemp(prefix="colab-out-")
         return image_dir_used
 
+    meter = None
+    run_limit = None
+    if json_output or budget is not None:
+        meter = CostMeter(state.client, accelerator=accelerator.value)
+    if budget is not None:
+        run_limit = meter.seconds_for(budget)
+        if run_limit is None:
+            typer.echo(
+                "[colab] --budget not enforced: no compute-unit rate is available.",
+                err=True,
+            )
+
     def on_started(kid):
         s.kernel_id = kid
         state.store.add(s)
@@ -510,13 +534,31 @@ def run_command(
 
         source = _script_block(script, payload)
         run_started = time.monotonic()
+        run_kwargs = {
+            # With --json the script's output goes into the record only.
+            "output_hook": (lambda o: None) if emitter else _make_run_output_hook(),
+            "timeout": timeout,
+        }
+        if run_limit is not None:
+            run_kwargs["run_limit"] = max(run_limit - (time.monotonic() - started), 0.001)
         try:
-            outputs = runtime.execute_code(
-                payload,
-                # With --json the script's output goes into the record only.
-                output_hook=(lambda o: None) if emitter else _make_run_output_hook(),
-                timeout=timeout,
-            )
+            outputs = runtime.execute_code(payload, **run_kwargs)
+        except RunLimitExceeded as e:
+            exit_code = 5
+            cleanup_reason = "run_failed"
+            if emitter:
+                records.append(failure_record(
+                    "budget_reached", str(e), index=0, cell_id=None, block=source,
+                    session=live_session, duration_s=time.monotonic() - run_started,
+                    budget=budget,
+                ))
+                emitter.emit(records[-1])
+            else:
+                typer.echo(
+                    f"[colab] Budget of {budget:g} compute units reached "
+                    "(estimated); the script was interrupted.",
+                    err=True,
+                )
         except (TimeoutError, SessionConnectionLost) as e:
             exit_code = 1
             cleanup_reason = "run_failed"
@@ -565,9 +607,11 @@ def run_command(
             _teardown(name, s, reason=cleanup_reason)
 
     if emitter:
+        duration = time.monotonic() - started
         emitter.emit(build_summary(
-            records, duration_s=time.monotonic() - started, session=name,
+            records, duration_s=duration, session=name,
             exit_code=exit_code, output_dir=image_dir_used,
+            cost=meter.block(duration) if meter else None,
         ))
     if exit_code != 0:
         raise typer.Exit(exit_code)

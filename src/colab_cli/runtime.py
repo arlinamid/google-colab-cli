@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _CONNECTION_LOST = "Connection was lost"
 
 
+class RunLimitExceeded(TimeoutError):
+    """The whole run took longer than ``run_limit`` (from --budget)."""
+
+
 class SessionConnectionLost(RuntimeError):
     """The connection to the session's kernel dropped during an execution."""
 
@@ -222,6 +226,7 @@ class ColabRuntime:
         stdin_hook: Any = None,
         output_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout: Optional[float] = None,
+        run_limit: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         if allow_stdin and output_hook is not None:
             raise NotImplementedError(
@@ -289,13 +294,15 @@ class ColabRuntime:
 
             try:
                 reply = self._run(
-                    self._execute_streaming, code, wrapped_output_hook, timeout
+                    self._execute_streaming, code, wrapped_output_hook, timeout,
+                    run_limit,
                 )
             except TimeoutError as e:
                 # Unlike upstream, stop the code too: a timed-out run should
                 # not keep the runtime busy (and billing) in the background.
                 self._interrupt_quietly()
-                raise TimeoutError(f"{e} The kernel was interrupted.") from e
+                kind = RunLimitExceeded if isinstance(e, RunLimitExceeded) else TimeoutError
+                raise kind(f"{e} The kernel was interrupted.") from e
             reply_content = reply["content"] if reply else {"status": "error"}
 
         # If there's an error status but no error in outputs, synthesize one
@@ -318,6 +325,7 @@ class ColabRuntime:
         code: str,
         output_hook: Callable[[Dict[str, Any]], None],
         timeout: Optional[float],
+        run_limit: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Run ``code``, pass each output message to ``output_hook``, return the reply.
 
@@ -334,6 +342,8 @@ class ColabRuntime:
         """
         if timeout is not None and timeout <= 0:
             timeout = None
+        # ``run_limit`` caps the whole run, output or not (--budget).
+        run_end = (time.monotonic() + run_limit) if run_limit else None
         client = self.kernel_client._manager.client
         msg_id = client.execute(code, allow_stdin=False)
 
@@ -343,6 +353,13 @@ class ColabRuntime:
                 if not client.connection_ready.is_set():
                     raise RuntimeError("Connection was lost.")
                 wait = _WAIT_SLICE_SEC
+                if run_end is not None:
+                    left = run_end - time.monotonic()
+                    if left <= 0:
+                        raise RunLimitExceeded(
+                            f"The run limit of {run_limit:g}s was reached."
+                        )
+                    wait = min(wait, left)
                 if deadline is not None:
                     left = deadline - time.monotonic()
                     if left <= 0:

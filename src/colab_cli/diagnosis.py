@@ -185,7 +185,9 @@ def diagnose(
     return _result("unknown", f"{ename}: {evalue}".strip(": "))
 
 
-def diagnose_failure(kind: str, *, session: Optional[str] = None, timeout=None) -> Dict:
+def diagnose_failure(
+    kind: str, *, session: Optional[str] = None, timeout=None, budget=None
+) -> Dict:
     """Diagnose a failure of the CLI itself, not of the user's code."""
     if kind == "idle_timeout":
         return _result(
@@ -196,6 +198,18 @@ def diagnose_failure(kind: str, *, session: Optional[str] = None, timeout=None) 
             [
                 _action(None, "raise --timeout, or print progress more often"),
                 _action(None, "for long jobs, run them detached (colab job, planned)"),
+            ],
+        )
+    if kind == "budget_reached":
+        return _result(
+            "budget_reached",
+            f"The compute budget ({budget:g} CU, estimated from the hourly "
+            "rate) was reached; the code was stopped."
+            if budget
+            else "The compute budget was reached; the code was stopped.",
+            [
+                _action(None, "raise --budget, or make the run cheaper (less data, a smaller model, or a CPU runtime)"),
+                _action("colab usage --json", "check the balance and the hourly rate"),
             ],
         )
     if kind == "session_lost":

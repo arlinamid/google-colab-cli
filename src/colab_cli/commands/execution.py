@@ -34,7 +34,8 @@ from colab_cli.results import (
     build_summary,
     failure_record,
 )
-from colab_cli.runtime import ColabRuntime, SessionConnectionLost
+from colab_cli.cost import CostMeter
+from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
 from colab_cli.utils import (
     handle_image,
     is_terminal_error,
@@ -363,6 +364,17 @@ def exec_command(
             help="With --json: where to save images (default: a new temp folder).",
         ),
     ] = None,
+    budget: Annotated[
+        Optional[float],
+        typer.Option(
+            "--budget",
+            help=(
+                "Stop (interrupt) the code once it has used about this many "
+                "compute units, estimated from the account's hourly rate at "
+                "the start. Exit code 5."
+            ),
+        ),
+    ] = None,
 ):
     """Execute code in a session.
 
@@ -374,18 +386,18 @@ def exec_command(
     args = (state, session, file, output_image, timeout, env, secret, cells,
             stop_on_error, check, check_only)
     if not (json_output or json_stream):
-        _exec(*args)
+        _exec(*args, budget=budget)
         return
     emitter = JsonEmitter(sys.stdout)
     # Human output ([colab] lines, notebook progress) must not mix with JSON.
     with contextlib.redirect_stdout(sys.stderr):
         _exec(*args, emitter=emitter, stream_events=json_stream,
-              output_dir=output_dir)
+              output_dir=output_dir, budget=budget)
 
 
 def _exec(state, session, file, output_image, timeout, env, secret, cells,
           stop_on_error, check, check_only, *, emitter=None,
-          stream_events=False, output_dir=None):
+          stream_events=False, output_dir=None, budget=None):
     env_vars = _parse_env_vars(env)
     is_nb = bool(file and file.endswith(".ipynb"))
     if (cells is not None or stop_on_error) and not is_nb:
@@ -459,6 +471,19 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
     exit_code = 0
     started = time.monotonic()
     image_dir_used = None
+    meter = None
+    run_end = None
+    if emitter or budget is not None:
+        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None))
+    if budget is not None:
+        seconds = meter.seconds_for(budget)
+        if seconds is None:
+            typer.echo(
+                "[colab] --budget not enforced: no compute-unit rate is available.",
+                err=True,
+            )
+        else:
+            run_end = started + seconds
 
     def image_dir():
         nonlocal image_dir_used
@@ -498,12 +523,31 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                 prelude_lines=prelude.count("\n"),
             )
             block_started = time.monotonic()
+            run_kwargs = {
+                "output_hook": _output_hook(emitter, stream_events, i, output_image),
+                "timeout": timeout,
+            }
+            if run_end is not None:
+                run_kwargs["run_limit"] = max(run_end - block_started, 0.001)
             try:
-                outputs = runtime.execute_code(
-                    code,
-                    output_hook=_output_hook(emitter, stream_events, i, output_image),
-                    timeout=timeout,
+                outputs = runtime.execute_code(code, **run_kwargs)
+            except RunLimitExceeded as e:
+                exit_code = 5
+                if not emitter:
+                    typer.echo(
+                        f"[colab] Budget of {budget:g} compute units reached "
+                        "(estimated); the kernel was interrupted.",
+                        err=True,
+                    )
+                    break
+                rec = failure_record(
+                    "budget_reached", str(e), index=i, cell_id=block.get("id"),
+                    block=source, session=name,
+                    duration_s=time.monotonic() - block_started, budget=budget,
                 )
+                emitter.emit(rec)
+                records.append(rec)
+                break
             except (TimeoutError, SessionConnectionLost) as e:
                 if not emitter:
                     raise
@@ -561,13 +605,17 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
         )
     if emitter:
         exit_code = exit_code or (1 if failed else 0)
+        duration = time.monotonic() - started
         emitter.emit(build_summary(
-            records, duration_s=time.monotonic() - started, session=name,
+            records, duration_s=duration, session=name,
             exit_code=exit_code, output_dir=image_dir_used,
+            cost=meter.block(duration) if meter else None,
         ))
         if exit_code:
             raise typer.Exit(exit_code)
         return
+    if exit_code:
+        raise typer.Exit(exit_code)
     if failed:
         raise typer.Exit(1)
 

@@ -92,6 +92,7 @@ class Job:
             "exit_code": None,
             "last_output_at": None,
             "progress": None,
+            "stop_reason": None,
         }
         self.tail = collections.deque(maxlen=TAIL_LINES)
         self.current = ""
@@ -157,14 +158,21 @@ class Job:
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         stop_file = os.path.join(self.folder, "stop")
+        max_seconds = self.spec.get("max_seconds")
         stopping_since = None
         last_save = time.monotonic()
         while child.poll() is None:
             time.sleep(POLL)
-            if stopping_since is None and os.path.exists(stop_file):
+            reason = None
+            if stopping_since is None:
+                if os.path.exists(stop_file):
+                    reason = "request"
+                elif max_seconds and time.time() - self.status["started_at"] >= max_seconds:
+                    reason = "budget"  # --budget, converted to seconds at start
+            if reason:
                 stopping_since = time.monotonic()
                 with self.lock:
-                    self.status["state"] = "stopping"
+                    self.status.update(state="stopping", stop_reason=reason)
                     self.dirty = True
                 child.terminate()
             elif stopping_since is not None and time.monotonic() - stopping_since > GRACE:

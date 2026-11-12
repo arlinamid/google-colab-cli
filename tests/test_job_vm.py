@@ -171,3 +171,20 @@ def test_sources_are_plain_python_without_cli_imports():
     for src in (RUNNER_SOURCE, FEEDBACK_SOURCE):
         compile(src, "<vm>", "exec")
         assert "colab_cli" not in src
+
+
+def test_max_seconds_stops_the_job_for_the_budget(tmp_path):
+    d = _make_job(tmp_path, """
+        import time
+        while True:
+            time.sleep(0.05)
+    """)
+    spec = json.loads((d / "spec.json").read_text())
+    spec["max_seconds"] = 0.5
+    (d / "spec.json").write_text(json.dumps(spec))
+
+    assert _start(d).wait(timeout=30) == 0
+
+    st = _status(d)
+    assert st["state"] == "stopped"
+    assert st["stop_reason"] == "budget"

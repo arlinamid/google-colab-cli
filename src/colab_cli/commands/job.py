@@ -31,6 +31,7 @@ from typing_extensions import Annotated
 
 from colab_cli.commands.execution import SECRET_HELP, _parse_env_vars, read_script
 from colab_cli.contents import ContentsClient
+from colab_cli.cost import CostMeter
 from colab_cli.jobs import (
     DEFAULT_STALL_AFTER,
     JOBS_DIR,
@@ -105,9 +106,13 @@ def _read_optional(files, path: str) -> str:
         return ""
 
 
-def _record(files, job_id, session, stall_after, tail_lines=20):
+def _record(files, job_id, session, stall_after, tail_lines=20, meter=None):
     status = _read_status(files, job_id, session)
     base = f"{JOBS_DIR}/{job_id}"
+    started, ended = status.get("started_at"), status.get("ended_at")
+    cost = None
+    if meter is not None and started:
+        cost = meter.block((ended or time.time()) - started)
     return job_record(
         status,
         metrics=parse_metrics(_read_optional(files, f"{base}/metrics.jsonl")),
@@ -116,6 +121,7 @@ def _record(files, job_id, session, stall_after, tail_lines=20):
         stall_after=stall_after,
         session=session,
         tail_lines=tail_lines,
+        cost=cost,
     )
 
 
@@ -174,6 +180,17 @@ def start(
         typer.Option("--env", help="KEY=VALUE environment variable for the job. Repeatable."),
     ] = None,
     secret: Annotated[Optional[List[str]], typer.Option("--secret", help=SECRET_HELP)] = None,
+    budget: Annotated[
+        Optional[float],
+        typer.Option(
+            "--budget",
+            help=(
+                "Stop the job once it has used about this many compute units, "
+                "estimated from the account's hourly rate now. Enforced on the "
+                "runtime, even with no client connected."
+            ),
+        ),
+    ] = None,
     json_output: JsonOpt = False,
     cmd: Annotated[
         Optional[List[str]],
@@ -206,13 +223,21 @@ def start(
     env_vars.update(resolve_secrets(secret, state.history))
     label = name or (os.path.splitext(os.path.basename(file))[0] if file else os.path.basename(argv[0]))
     job_id = new_job_id(label)
+    max_seconds = None
+    if budget is not None:
+        max_seconds = CostMeter(state.client).seconds_for(budget)
+        if max_seconds is None:
+            typer.echo("[colab] --budget not enforced: no compute-unit rate is available.", err=True)
 
     runtime = ColabRuntime(
         s.url, s.token, session_name=s.name, kernel_id=s.kernel_id, session_id=s.session_id,
     )
     try:
         outputs = runtime.execute_code(
-            build_start_code(job_id, name=label, argv=argv, env=env_vars, script_source=source)
+            build_start_code(
+                job_id, name=label, argv=argv, env=env_vars, script_source=source,
+                max_seconds=max_seconds,
+            )
         )
     finally:
         runtime.stop()
@@ -254,10 +279,11 @@ def status(
     lines: Annotated[int, typer.Option("-n", "--lines", help="Lines of output to show.")] = 20,
 ):
     """Show a job's state, progress, metrics, last output and diagnosis."""
-    _state, session_name, s = _session(session)
+    state, session_name, s = _session(session)
     files = ContentsClient(s)
     job_id = _resolve_job(files, job_id, session_name)
-    rec = _record(files, job_id, session_name, stall_after, tail_lines=lines)
+    meter = CostMeter(state.client) if json_output else None
+    rec = _record(files, job_id, session_name, stall_after, tail_lines=lines, meter=meter)
     if json_output:
         JsonEmitter(sys.stdout).emit(rec)
     else:
@@ -315,9 +341,10 @@ def wait(
     files = ContentsClient(s)
     job_id = _resolve_job(files, job_id, session_name)
     pinger = _Pinger(state.client, s.endpoint)
+    meter = CostMeter(state.client) if json_output else None
     started = time.monotonic()
     while True:
-        rec = _record(files, job_id, session_name, stall_after)
+        rec = _record(files, job_id, session_name, stall_after, meter=meter)
         if rec["state"] not in RUNNING_STATES:
             break
         if timeout is not None and time.monotonic() - started >= timeout:

@@ -27,7 +27,7 @@ import re
 import secrets
 from typing import Any, Dict, List, Optional
 
-from colab_cli.diagnosis import _result, diagnose
+from colab_cli.diagnosis import _result, diagnose, diagnose_failure
 from colab_cli.job_vm import FEEDBACK_SOURCE, RUNNER_SOURCE
 from colab_cli.results import SCHEMA
 
@@ -71,6 +71,7 @@ def build_start_code(
     env: Dict[str, str],
     script_source: Optional[str] = None,
     jobs_dir: str = JOBS_DIR,
+    max_seconds: Optional[float] = None,
 ) -> str:
     """Kernel code that creates the job folder and starts the runner.
 
@@ -82,6 +83,8 @@ def build_start_code(
     if script_source is not None:
         files["script.py"] = _b64(script_source)
     spec = {"id": job_id, "name": name, "argv": argv, "cwd": "/content"}
+    if max_seconds:
+        spec["max_seconds"] = round(max_seconds, 1)
     return (
         "def _colab_job_start():\n"
         "    import base64, json, os, subprocess, sys\n"
@@ -167,6 +170,7 @@ def job_record(
     session: Optional[str],
     file: Optional[str] = None,
     tail_lines: int = 20,
+    cost: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The `colab job status --json` record for one job."""
     state = status.get("state")
@@ -179,6 +183,8 @@ def job_record(
     diagnosis = None
     if state == "failed" and tail is not None:  # None: the output was not read
         diagnosis = diagnose_log(tail, session=session, file=file)
+    elif state == "stopped" and status.get("stop_reason") == "budget":
+        diagnosis = diagnose_failure("budget_reached", session=session)
     elif stalled:
         diagnosis = _stalled(status.get("id"), session, silent)
     last = {k: v for k, v in (metrics[-1] if metrics else {}).items() if k != "t"}
@@ -189,6 +195,7 @@ def job_record(
         "name": status.get("name"),
         "session": session,
         "state": state,
+        "stop_reason": status.get("stop_reason"),
         "exit_code": status.get("exit_code"),
         "pid": status.get("pid"),
         "argv": status.get("argv"),
@@ -201,6 +208,7 @@ def job_record(
         "metrics": {"last": last or None, "trend": metric_trend(metrics), "count": len(metrics)},
         "tail": tail.splitlines()[-tail_lines:] if tail else [],
         "diagnosis": diagnosis,
+        "cost": cost,
     }
 
 

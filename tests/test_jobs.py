@@ -183,3 +183,15 @@ def test_record_tail_is_limited():
 )
 def test_new_lines(prev, cur, new):
     assert new_lines(prev, cur) == new
+
+
+def test_budget_stop_has_a_diagnosis():
+    st = dict(STATUS, state="stopped", exit_code=-15, ended_at=1700.0, stop_reason="budget")
+    rec = job_record(st, metrics=[], tail="", now=9999.0, stall_after=600, session="s")
+    assert rec["stop_reason"] == "budget"
+    assert rec["diagnosis"]["code"] == "budget_reached"
+
+
+def test_start_code_carries_max_seconds():
+    code = build_start_code("j-3", name="j", argv=["sleep", "9"], env={}, max_seconds=1800.0)
+    assert "'max_seconds': 1800.0" in code

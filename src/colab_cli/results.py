@@ -232,7 +232,11 @@ def build_cell_record(
     return record
 
 
-_FAILURE_ENAMES = {"idle_timeout": "TimeoutError", "session_lost": "SessionConnectionLost"}
+_FAILURE_ENAMES = {
+    "idle_timeout": "TimeoutError",
+    "session_lost": "SessionConnectionLost",
+    "budget_reached": "RunLimitExceeded",
+}
 
 
 def failure_record(
@@ -245,8 +249,9 @@ def failure_record(
     session: Optional[str],
     duration_s: float,
     timeout: Optional[float] = None,
+    budget: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """A record for a block the CLI could not finish (timeout, lost session)."""
+    """A record for a block the CLI could not finish (timeout, budget, lost session)."""
     return {
         "schema": SCHEMA,
         "type": "cell",
@@ -265,7 +270,7 @@ def failure_record(
             "traceback": "",
             "location": None,
         },
-        "diagnosis": diagnose_failure(kind, session=session, timeout=timeout),
+        "diagnosis": diagnose_failure(kind, session=session, timeout=timeout, budget=budget),
         "duration_s": round(duration_s, 2),
         "session": session,
     }
@@ -278,6 +283,7 @@ def build_summary(
     session: Optional[str],
     exit_code: int,
     output_dir: Optional[str],
+    cost: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     failed = sum(1 for r in records if r.get("status") != "ok")
     return {
@@ -290,7 +296,7 @@ def build_summary(
         "duration_s": round(duration_s, 2),
         "session": session,
         "output_dir": output_dir,
-        "cost": None,
+        "cost": cost,
     }
 
 
