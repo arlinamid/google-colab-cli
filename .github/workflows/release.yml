@@ -25,6 +25,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       - name: Build sdist and wheel
         run: uv build
@@ -67,6 +70,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       - name: Install the wheel in a clean environment and run it
         shell: bash
@@ -103,6 +109,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       # cryptography has no macOS x64 wheel, so uv builds it from source.
       # Linked dynamically, it needs Homebrew's libssl.3.dylib, but PyInstaller
