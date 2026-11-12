@@ -13,8 +13,12 @@
 # limitations under the License.
 
 import base64
+import functools
 import html2text
 import logging
+import os
+import re
+import subprocess
 import sys
 import tempfile
 import tokenize
@@ -63,6 +67,57 @@ def utf8_text_stream(stream):
     if (stream.encoding or "").lower().replace("-", "") != "utf8":
         stream.reconfigure(encoding="utf-8", errors="replace")
     return stream
+
+
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+@functools.lru_cache(maxsize=1)
+def _msys_root() -> Optional[str]:
+    """Windows path of the Git Bash (MSYS) root, like ``C:/Program Files/Git``."""
+    root = ""
+    try:
+        root = subprocess.run(
+            ["cygpath", "-m", "/"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        # git-bash.exe sets EXEPATH to the install root or its bin folder.
+        exepath = os.environ.get("EXEPATH", "").rstrip("\\/")
+        if os.path.basename(exepath).lower() == "bin":
+            exepath = os.path.dirname(exepath)
+        root = exepath
+    return root.replace("\\", "/").rstrip("/") or None
+
+
+def undo_msys_path(path: str) -> str:
+    """Turns a remote path that Git Bash rewrote back into a POSIX path.
+
+    Git Bash (MSYS) converts arguments that look like POSIX paths before a
+    native Windows program sees them, so ``colab ls /content`` arrives as
+    ``C:/Program Files/Git/content``. Remote paths are never Windows paths,
+    so under Git Bash one inside the MSYS root is turned back into
+    ``/content``. Anything else, and every path on Linux and macOS, is
+    returned unchanged.
+    """
+    if (
+        sys.platform != "win32"
+        or not os.environ.get("MSYSTEM")
+        or not _DRIVE_PATH.match(path)
+    ):
+        return path
+    root = _msys_root()
+    if not root:
+        return path
+    normalized = path.replace("\\", "/")
+    if normalized.rstrip("/").lower() == root.lower():
+        return "/"
+    if normalized.lower().startswith(root.lower() + "/"):
+        return normalized[len(root):]
+    return path
 
 
 def get_status_code(e: Exception) -> Optional[int]:

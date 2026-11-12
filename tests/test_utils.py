@@ -107,3 +107,109 @@ def test_open_url_in_browser_headless_returns_false(mock_open):
 @patch("colab_cli.utils.webbrowser.open", side_effect=OSError("no opener"))
 def test_open_url_in_browser_swallows_opener_errors(mock_open):
     assert open_url_in_browser("https://example.com/auth") is False
+
+
+# Git Bash (MSYS) rewrites arguments that look like POSIX paths before a
+# native program sees them: `colab ls /content` arrives as
+# `C:/Program Files/Git/content`. Remote paths are never Windows paths, so
+# the CLI turns them back.
+GIT_ROOT = "C:/Program Files/Git"
+
+
+@pytest.fixture
+def git_bash(mocker, monkeypatch):
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", "win32")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        ("C:/Program Files/Git/content/x.txt", "/content/x.txt"),
+        ("c:/program files/git/content", "/content"),
+        (r"C:\Program Files\Git\content\x", "/content/x"),
+        ("C:/Program Files/Git/", "/"),
+        ("C:/Program Files/Git", "/"),
+        ("/content/x.txt", "/content/x.txt"),
+        ("content/x.txt", "content/x.txt"),
+        ("D:/data/x.txt", "D:/data/x.txt"),
+        ("C:/Program Files/Gitlab/x", "C:/Program Files/Gitlab/x"),
+    ],
+)
+def test_undo_msys_path_under_git_bash(git_bash, given, expected):
+    from colab_cli.utils import undo_msys_path
+
+    assert undo_msys_path(given) == expected
+
+
+def test_undo_msys_path_outside_git_bash(mocker, monkeypatch):
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", "win32")
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    root = mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+    path = "C:/Program Files/Git/content"
+    assert utils.undo_msys_path(path) == path
+    root.assert_not_called()
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_undo_msys_path_is_windows_only(mocker, monkeypatch, platform):
+    """On Linux and macOS a remote path named like a Windows path is kept."""
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", platform)
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+    path = "C:/Program Files/Git/content"
+    assert utils.undo_msys_path(path) == path
+
+
+def test_msys_root_asks_cygpath(mocker):
+    from colab_cli import utils
+
+    utils._msys_root.cache_clear()
+    run = mocker.patch.object(
+        utils.subprocess, "run", return_value=MagicMock(stdout="C:/Program Files/Git/\n")
+    )
+    assert utils._msys_root() == GIT_ROOT
+    assert run.call_args.args[0] == ["cygpath", "-m", "/"]
+    utils._msys_root.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "exepath", [r"C:\Program Files\Git\bin", r"C:\Program Files\Git"]
+)
+def test_msys_root_falls_back_to_exepath(mocker, monkeypatch, exepath):
+    from colab_cli import utils
+
+    utils._msys_root.cache_clear()
+    mocker.patch.object(utils.subprocess, "run", side_effect=FileNotFoundError)
+    monkeypatch.setenv("EXEPATH", exepath)
+    assert utils._msys_root() == GIT_ROOT
+    utils._msys_root.cache_clear()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_ls_undoes_git_bash_path_conversion(mock_contents_class, mocker):
+    from typer.testing import CliRunner
+
+    from colab_cli.cli import app
+    from colab_cli.common import state
+
+    mocker.patch(
+        "colab_cli.commands.files.undo_msys_path",
+        side_effect=lambda p: "/content" if p.startswith("C:/") else p,
+    )
+    state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.list_dir.return_value = {"type": "directory"}
+
+    result = CliRunner().invoke(app, ["ls", "-s", "s1", GIT_ROOT + "/content"])
+
+    assert result.exit_code == 0, result.output
+    mock_contents_class.return_value.list_dir.assert_called_once_with("/content")

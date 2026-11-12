@@ -25,6 +25,7 @@ from typing_extensions import Annotated
 from colab_cli.common import redact_secrets
 from colab_cli.contents import ContentsClient
 from colab_cli.terminal import is_windows, split_windows_command_line
+from colab_cli.utils import undo_msys_path
 
 
 def ls(
@@ -37,6 +38,7 @@ def ls(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    path = undo_msys_path(path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -66,6 +68,7 @@ def rm(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    path = undo_msys_path(path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -88,6 +91,7 @@ def upload(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
     if not os.path.isfile(local_path):
         typer.echo(f"[colab] Local file '{local_path}' not found.")
@@ -121,6 +125,7 @@ def download(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -176,6 +181,7 @@ def edit(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
 
     contents = ContentsClient(s)
