@@ -926,3 +926,21 @@ def test_cli_edit_failing_editor_is_a_clean_error(
     assert isinstance(result.exception, SystemExit)
     assert "[colab] vim: Editing failed" in result.output
     mock_contents_class.return_value.upload.assert_not_called()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_ls_undoes_git_bash_path_conversion(
+    mock_contents_class, mock_store, mock_common_state, mocker
+):
+    mocker.patch(
+        "colab_cli.commands.files.undo_msys_path",
+        side_effect=lambda p: "/content" if p.startswith("C:/") else p,
+    )
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.list_dir.return_value = {"type": "directory"}
+
+    result = runner.invoke(app, ["ls", "-s", "s1", "C:/Program Files/Git/content"])
+
+    assert result.exit_code == 0, result.output
+    mock_contents_class.return_value.list_dir.assert_called_once_with("/content")

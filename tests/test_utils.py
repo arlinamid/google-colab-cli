@@ -193,23 +193,3 @@ def test_msys_root_falls_back_to_exepath(mocker, monkeypatch, exepath):
     monkeypatch.setenv("EXEPATH", exepath)
     assert utils._msys_root() == GIT_ROOT
     utils._msys_root.cache_clear()
-
-
-@patch("colab_cli.commands.files.ContentsClient")
-def test_cli_ls_undoes_git_bash_path_conversion(mock_contents_class, mocker):
-    from typer.testing import CliRunner
-
-    from colab_cli.cli import app
-    from colab_cli.common import state
-
-    mocker.patch(
-        "colab_cli.commands.files.undo_msys_path",
-        side_effect=lambda p: "/content" if p.startswith("C:/") else p,
-    )
-    state.resolve_session.return_value = "s1"
-    mock_contents_class.return_value.list_dir.return_value = {"type": "directory"}
-
-    result = CliRunner().invoke(app, ["ls", "-s", "s1", GIT_ROOT + "/content"])
-
-    assert result.exit_code == 0, result.output
-    mock_contents_class.return_value.list_dir.assert_called_once_with("/content")
