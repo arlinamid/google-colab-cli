@@ -39,19 +39,21 @@ Designed to support seamless developer productivity, headless automation, and AI
 
 ## Installation
 
-Install this fork from its [GitHub release](https://github.com/arlinamid/google-colab-cli/releases) using `uv` (recommended) or `pip`. The wheel is pure Python and works on Linux, macOS and Windows:
+Install the latest version of this fork from GitHub using `uv` (recommended) or `pip`. It is pure Python and works on Linux, macOS and Windows; `git` must be installed:
 
 ```bash
 # Using uv (recommended)
-uv tool install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.2/google_colab_cli-0.7.5.2-py3-none-any.whl
+uv tool install git+https://github.com/arlinamid/google-colab-cli
 
 # Using pip
-pip install https://github.com/arlinamid/google-colab-cli/releases/download/v0.7.5.2/google_colab_cli-0.7.5.2-py3-none-any.whl
+pip install git+https://github.com/arlinamid/google-colab-cli
 ```
+
+This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.3.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.2`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
 
 `uv tool install google-colab-cli` / `pip install google-colab-cli` install Google's official release from PyPI instead, without this fork's changes.
 
-**Standalone binary (no Python needed):** each release also has a single-file `colab` program: `colab-<version>-windows-x64.exe`, `colab-<version>-linux-x64` and `colab-<version>-macos-x64` (Intel; runs on Apple silicon through Rosetta 2). Download it from the [releases page](https://github.com/arlinamid/google-colab-cli/releases), rename it to `colab` (`colab.exe` on Windows), put it on your `PATH`, and on Linux/macOS run `chmod +x colab`. `colab update` tells you when a new one is out; download it the same way (`colab update --install` only upgrades pip/uv installs). To build one yourself: `uv run --with pyinstaller python packaging/build_binary.py`.
+**Standalone binary (no Python needed):** each release also has a single-file `colab` program: `colab-<version>-windows-x64.exe`, `colab-<version>-linux-x64` and `colab-<version>-macos-x64` (Intel; runs on Apple silicon through Rosetta 2). Download it from the [latest release](https://github.com/arlinamid/google-colab-cli/releases/latest), rename it to `colab` (`colab.exe` on Windows), put it on your `PATH`, and on Linux/macOS run `chmod +x colab`. `colab update` tells you when a new one is out; download it the same way (`colab update --install` only upgrades pip/uv installs). To build one yourself: `uv run --with pyinstaller python packaging/build_binary.py`.
 
 ---
 
