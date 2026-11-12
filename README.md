@@ -98,6 +98,8 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only] [--json \| --json-stream]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
+| `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; Python jobs can report metrics with `colab_feedback.report()` |
+| `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
 | `colab share [-s NAME] PORT [--via cloudflared\|ngrok] [--detach]` | Share a runtime port at a public URL (keeps the runtime alive until Ctrl+C; `--list`, `--stop`) |
 

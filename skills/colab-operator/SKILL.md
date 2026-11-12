@@ -73,6 +73,15 @@ Prefer `--json` whenever you parse the result; set `COLAB_CLI_JSON=1` once to tu
 - Works as a shebang: `#!/usr/bin/env -S colab run --gpu T4` makes a `chmod +x`'d `.py` a self-contained "rent a GPU, run, clean up" script. After editing CLI behavior, reinstall before testing shebangs — they resolve `colab` via `$PATH`, not the editable install.
 - A nonexistent script path exits non-zero **before** allocating a VM (no wasted compute).
 
+### Long jobs in the background (`colab job`)
+Use this instead of a long `colab exec` (which blocks you and can hit `--timeout`): training, downloads, anything over a few minutes.
+- **Start and return at once**: `colab job start -s <name> -f train.py [--name train] [--env K=V] [--secret NAME] [-- script args]`, or a shell command: `colab job start -s <name> -- 'bash command'`. It prints the job id (`--json`: a `"type": "job"` record). The job runs as its own process on the VM, apart from the kernel, so `colab exec`/`inspect` stay usable, and it keeps running after the command exits (verified for 100 minutes with no client connected).
+- **Report progress from Python**: `from colab_feedback import report, note` (already on the job's path), then `report(step=i, loss=l, val_acc=a)` and `note("switched lr")`. Outside a job they do nothing. tqdm bars are read automatically.
+- **Check without blocking**: `colab job status -s <name> [ID] --json` (default: the newest job) gives `state` (`starting`/`running`/`stopping`/`succeeded`/`failed`/`stopped`), `progress` (`percent`, `n`, `total`, `eta_s`), `metrics.last` and `metrics.trend` (first/last/min/max per metric), `tail` (last lines of output), `silent_s`, `stalled` (true after `--stall-after`, default 600 s, without output) and `diagnosis`. A failed job gets the same diagnosis codes and `next_actions` as `--json` exec results (read from the traceback in its output); a stalled one gets code `stalled`.
+- **Block until done**: `colab job wait -s <name> ID [--interval 30] [--timeout S] --json` keeps the runtime alive while waiting and exits with the job's own code (130 if stopped, 4 if `--timeout` passed; the job keeps running).
+- **Other**: `colab job tail -s <name> ID [-n 50] [--follow]`, `colab job stop -s <name> ID` (SIGTERM, SIGKILL after 10 s), `colab job list -s <name> [--json]`. Full output: `colab download -s <name> /content/.colab-jobs/ID/output.log out.log`.
+- **Loop for agents**: start, then poll `status --json` every few minutes; act on `stalled`, a falling/rising metric trend, or `state: failed` + `diagnosis.next_actions`; `stop` and restart with a fix if needed.
+
 ### Automate
 - `colab auth -s <name>` — VM-side GCP creds, needed before in-VM GCS/BigQuery calls (interactive; not agent-runnable).
 - `colab drivemount -s <name> [--authuser N] [PATH]` — mounts Drive at `/content/drive` by default (interactive; not agent-runnable). The user must approve the printed consent URL in a browser as the same account `colab whoami` shows; a multi-account browser rejects the mount with HTTP 400 unless that account is the one selected on the chooser. The kernel waits 10 minutes, not 2.
