@@ -193,3 +193,27 @@ def test_msys_root_falls_back_to_exepath(mocker, monkeypatch, exepath):
     monkeypatch.setenv("EXEPATH", exepath)
     assert utils._msys_root() == GIT_ROOT
     utils._msys_root.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        ("C:/Program Files/Git/content/x.txt", "/content/x.txt"),
+        ("--out=C:/Program Files/Git/content/o", "--out=/content/o"),
+        ("ls", "ls"),
+        ("D:/data", "D:/data"),
+        ("--flag", "--flag"),
+    ],
+)
+def test_undo_msys_arg_under_git_bash(git_bash, given, expected):
+    from colab_cli.utils import undo_msys_arg
+
+    assert undo_msys_arg(given) == expected
+
+
+def test_undo_msys_args_outside_git_bash_keeps_everything(mocker, monkeypatch):
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", "linux")
+    args = ["C:/Program Files/Git/content", "--out=C:/Program Files/Git/x"]
+    assert utils.undo_msys_args(args) == args

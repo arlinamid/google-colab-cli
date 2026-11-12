@@ -66,6 +66,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       - name: Install dependencies
         run: uv sync --locked
@@ -100,6 +103,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       - name: Build sdist and wheel
         run: uv build
@@ -146,6 +152,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          # macOS sets UV_NO_CACHE (static OpenSSL), so there is no cache to
+          # save; setup-uv v7 fails the job on that unless told it is fine.
+          ignore-nothing-to-cache: true
 
       # Same build as release.yml, so a broken binary shows up before a tag.
       # cryptography has no macOS x64 wheel, so uv builds it from source.

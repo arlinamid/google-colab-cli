@@ -203,3 +203,16 @@ def test_cli_update_check_for_ssh_follows_stdout_tty(mocker, cmd, tty):
     mocker.patch("subprocess.call", return_value=0)
     runner.invoke(app, ["ssh", "-s", "s1", *cmd])
     assert check.called is tty
+
+
+def test_ssh_cmd_undoes_git_bash_path_conversion(mocker):
+    mocker.patch(
+        "colab_cli.commands.ssh.undo_msys_args",
+        side_effect=lambda args: [a.replace("C:/Program Files/Git", "") for a in args],
+    )
+    call = mocker.patch("subprocess.call", return_value=0)
+
+    result = runner.invoke(app, ["ssh", "-s", "s1", "--", "ls", "C:/Program Files/Git/content"])
+
+    assert result.exit_code == 0, result.output
+    assert call.call_args.args[0][-1].endswith("ls /content")

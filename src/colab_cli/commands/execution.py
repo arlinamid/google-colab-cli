@@ -12,18 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import datetime
 import nbformat
 import os
 import re
 import sys
+import tempfile
+import time
 import typer
 from nbformat.v4 import new_output
 from rich.console import Console
 from typing import List, Optional
 from typing_extensions import Annotated
 
-from colab_cli.runtime import ColabRuntime
+from colab_cli.results import (
+    SCHEMA,
+    Block,
+    JsonEmitter,
+    build_cell_record,
+    build_summary,
+    failure_record,
+    history_fields,
+)
+from colab_cli.cost import CostMeter
+from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
 from colab_cli.utils import (
     handle_image,
     is_terminal_error,
@@ -321,13 +334,71 @@ def exec_command(
             ),
         ),
     ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            envvar="COLAB_CLI_JSON",
+            help=(
+                "For scripts and AI agents: print one JSON record per cell "
+                "(output, error with its local file line, diagnosis and next "
+                "steps), then a summary. Other output goes to stderr. Exit "
+                "codes: 1 code error, 3 lost session, 4 timeout. Also set by "
+                "COLAB_CLI_JSON=1."
+            ),
+        ),
+    ] = False,
+    json_stream: Annotated[
+        bool,
+        typer.Option(
+            "--json-stream",
+            help=(
+                "Like --json, plus an output event for each piece of output "
+                "as it arrives."
+            ),
+        ),
+    ] = False,
+    output_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output-dir",
+            help="With --json: where to save images (default: a new temp folder).",
+        ),
+    ] = None,
+    budget: Annotated[
+        Optional[float],
+        typer.Option(
+            "--budget",
+            help=(
+                "Stop (interrupt) the code once it has used about this many "
+                "compute units, estimated from the account's hourly rate at "
+                "the start. Exit code 5."
+            ),
+        ),
+    ] = None,
 ):
     """Execute code in a session.
 
     Exits with code 1 if the code (or any notebook cell) raised an error.
+    With --json, stdout carries only JSON records (docs/08_agent_feedback.md).
     """
     from colab_cli.common import state
 
+    args = (state, session, file, output_image, timeout, env, secret, cells,
+            stop_on_error, check, check_only)
+    if not (json_output or json_stream):
+        _exec(*args, budget=budget)
+        return
+    emitter = JsonEmitter(sys.stdout)
+    # Human output ([colab] lines, notebook progress) must not mix with JSON.
+    with contextlib.redirect_stdout(sys.stderr):
+        _exec(*args, emitter=emitter, stream_events=json_stream,
+              output_dir=output_dir, budget=budget)
+
+
+def _exec(state, session, file, output_image, timeout, env, secret, cells,
+          stop_on_error, check, check_only, *, emitter=None,
+          stream_events=False, output_dir=None, budget=None):
     env_vars = _parse_env_vars(env)
     is_nb = bool(file and file.endswith(".ipynb"))
     if (cells is not None or stop_on_error) and not is_nb:
@@ -383,17 +454,52 @@ def exec_command(
                 f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
             )
             state.prune_session(name)
+            if emitter:
+                rec = failure_record(
+                    "session_lost", str(e), index=0, cell_id=None,
+                    block=Block(label=file or "stdin"), session=name, duration_s=0,
+                )
+                emitter.emit(rec)
+                emitter.emit(build_summary(
+                    [rec], duration_s=0, session=name, exit_code=3, output_dir=None
+                ))
+                raise typer.Exit(3)
             raise typer.Exit(1)
         raise e
 
     failed = []
+    records = []
+    exit_code = 0
+    started = time.monotonic()
+    image_dir_used = None
+    meter = None
+    run_end = None
+    if emitter or budget is not None:
+        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None))
+    if budget is not None:
+        seconds = meter.seconds_for(budget)
+        if seconds is None:
+            typer.echo(
+                "[colab] --budget not enforced: no compute-unit rate is available.",
+                err=True,
+            )
+        else:
+            run_end = started + seconds
+
+    def image_dir():
+        nonlocal image_dir_used
+        if image_dir_used is None:
+            image_dir_used = output_dir or tempfile.mkdtemp(prefix="colab-out-")
+        return image_dir_used
+
     try:
         s.running = f"exec({file or 'stdin'})"
         state.store.add(s)
 
         total = len(code_blocks)
         for i, block in enumerate(code_blocks):
-            code = _build_env_prelude(env_vars) + block["code"]
+            prelude = _build_env_prelude(env_vars)
+            code = prelude + block["code"]
             identifier = None
             if is_nb:
                 identifier = block["title"] or block.get("id") or ""
@@ -410,25 +516,72 @@ def exec_command(
             )
             state.store.add(s)
 
-            outputs = runtime.execute_code(
-                code,
-                output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout,
+            source = Block(
+                label=block["label"],
+                file=file or "<stdin>",
+                cell=block.get("number") if is_nb else None,
+                code=block["code"],
+                prelude_lines=prelude.count("\n"),
             )
+            block_started = time.monotonic()
+            run_kwargs = {
+                "output_hook": _output_hook(emitter, stream_events, i, output_image),
+                "timeout": timeout,
+            }
+            if run_end is not None:
+                run_kwargs["run_limit"] = max(run_end - block_started, 0.001)
+            try:
+                outputs = runtime.execute_code(code, **run_kwargs)
+            except RunLimitExceeded as e:
+                exit_code = 5
+                if not emitter:
+                    typer.echo(
+                        f"[colab] Budget of {budget:g} compute units reached "
+                        "(estimated); the kernel was interrupted.",
+                        err=True,
+                    )
+                    break
+                rec = failure_record(
+                    "budget_reached", str(e), index=i, cell_id=block.get("id"),
+                    block=source, session=name,
+                    duration_s=time.monotonic() - block_started, budget=budget,
+                )
+                emitter.emit(rec)
+                records.append(rec)
+                break
+            except (TimeoutError, SessionConnectionLost) as e:
+                if not emitter:
+                    raise
+                kind = "idle_timeout" if isinstance(e, TimeoutError) else "session_lost"
+                rec = failure_record(
+                    kind, str(e) or kind, index=i, cell_id=block.get("id"),
+                    block=source, session=name,
+                    duration_s=time.monotonic() - block_started, timeout=timeout,
+                )
+                emitter.emit(rec)
+                records.append(rec)
+                exit_code = 4 if kind == "idle_timeout" else 3
+                break
             if "cell" in block:
                 save_output(outputs, block["cell"])
-            state.history.log_event(
-                name,
-                "execution",
-                {
-                    "code": code,
-                    "outputs": outputs,
-                    "cell_index": (
-                        block["number"] - 1 if is_nb else None
-                    ),
-                    "cell_id": block.get("id"),
-                },
-            )
+            block_duration = time.monotonic() - block_started
+            event = {
+                "code": code,
+                "outputs": outputs,
+                "cell_index": (block["number"] - 1 if is_nb else None),
+                "cell_id": block.get("id"),
+                **history_fields(outputs, block=source, duration_s=block_duration),
+            }
+            if emitter:
+                rec = build_cell_record(
+                    outputs, index=i, cell_id=block.get("id"), block=source,
+                    duration_s=block_duration, session=name,
+                    image_dir=image_dir,
+                )
+                add_seen_before(rec, state.history)
+                emitter.emit(rec)
+                records.append(rec)
+            state.history.log_event(name, "execution", event)
             if any(o.get("output_type") == "error" for o in outputs or []):
                 failed.append(block["label"])
                 if stop_on_error and i + 1 < total:
@@ -448,14 +601,67 @@ def exec_command(
             with open(output_file, "w", encoding="utf-8") as f:
                 nbformat.write(nb, f)
 
+    if failed and is_nb:
+        typer.echo(
+            f"[colab] {len(failed)} cell(s) raised an error: {', '.join(failed)}",
+            err=True,
+        )
+    if emitter:
+        exit_code = exit_code or (1 if failed else 0)
+        duration = time.monotonic() - started
+        emitter.emit(build_summary(
+            records, duration_s=duration, session=name,
+            exit_code=exit_code, output_dir=image_dir_used,
+            cost=meter.block(duration) if meter else None,
+        ))
+        if exit_code:
+            raise typer.Exit(exit_code)
+        return
+    if exit_code:
+        raise typer.Exit(exit_code)
     if failed:
-        if is_nb:
-            typer.echo(
-                f"[colab] {len(failed)} cell(s) raised an error: {', '.join(failed)}",
-                err=True,
-            )
         raise typer.Exit(1)
 
+
+def add_seen_before(rec, history) -> None:
+    """Phase E: say whether this failure happened before and what fixed it.
+
+    Reads the local history; any problem with it leaves seen_before null
+    rather than failing the run.
+    """
+    diagnosis = rec.get("diagnosis")
+    if not diagnosis:
+        return
+    diagnosis["seen_before"] = None
+    error = rec.get("error") or {}
+    try:
+        from colab_cli.experience import load_events, seen_before
+
+        diagnosis["seen_before"] = seen_before(
+            load_events(history),
+            {"diagnosis": diagnosis["code"], "ename": error.get("ename"),
+             "evalue": error.get("evalue")},
+        )
+    except Exception:
+        pass
+
+
+def _output_hook(emitter, stream_events, index, output_image):
+    """Show output as it arrives, or with --json-stream emit it as events."""
+    if emitter is None:
+        return lambda o: display_output(o, output_image)
+
+    def hook(o):
+        if stream_events and "text" in o and o.get("output_type", "stream") == "stream":
+            emitter.emit({
+                "schema": SCHEMA,
+                "type": "output",
+                "cell_index": index,
+                "stream": "stderr" if o.get("name") == "stderr" else "stdout",
+                "text": o["text"],
+            })
+
+    return hook
 
 def repl(
     session: Annotated[

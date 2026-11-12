@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+
 import typer
+from typing_extensions import Annotated
 
 from colab_cli.consumption import format_consumption_status
+from colab_cli.results import SCHEMA, JsonEmitter
 
 
-def usage():
+def usage(
+    json_output: Annotated[
+        bool, typer.Option("--json", envvar="COLAB_CLI_JSON", help="Print one JSON record.")
+    ] = False,
+):
     """Show account compute-unit usage rate and balance"""
     from colab_cli.common import state
 
@@ -30,6 +38,19 @@ def usage():
         )
         raise typer.Exit(code=1)
 
+    if json_output:
+        rate = result.consumption_rate_hourly
+        JsonEmitter(sys.stdout).emit({
+            "schema": SCHEMA,
+            "type": "usage",
+            "balance_cu": result.paid_compute_units_balance,
+            "rate_cu_per_hour": rate,
+            "hours_left_at_rate": (
+                round(result.paid_compute_units_balance / rate, 1) if rate > 0 else None
+            ),
+            "assignments": result.assignments_count,
+        })
+        return
     typer.echo(format_consumption_status(result))
 
 

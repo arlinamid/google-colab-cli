@@ -52,6 +52,7 @@ from urllib.parse import urlparse
 import uuid
 
 from colab_cli import secrets as colab_secrets
+from colab_cli.utils import undo_msys_args
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.commands import execution
@@ -118,6 +119,9 @@ def _kill_children_with_this_process() -> None:
     any way. POSIX shells already send SIGHUP to the whole job.
     """
     global _JOB_HANDLE
+    if sys.platform.startswith("linux"):
+        _tie_to_launcher_linux()
+        return
     if sys.platform != "win32" or _JOB_HANDLE is not None:
         return
     try:
@@ -178,6 +182,53 @@ def _kill_children_with_this_process() -> None:
             kernel32.CloseHandle(wintypes.HANDLE(job))
     except Exception:  # Best effort: never block ssh over cleanup.
         pass
+
+
+_PR_SET_PDEATHSIG = 1
+
+
+def _set_parent_death_signal(sig) -> bool:
+    """Linux: have the kernel send ``sig`` to this process when its parent dies."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(_PR_SET_PDEATHSIG, int(sig), 0, 0, 0) == 0
+    except Exception:  # Best effort: never block ssh over cleanup.
+        return False
+
+
+def _ssh_preexec() -> None:
+    """Runs in the forked ssh child before exec: die with this colab process.
+
+    SIGHUP reaches ssh when the terminal closes, but not when colab itself
+    is killed (SIGKILL); ssh then ends its ProxyCommand when it exits.
+    """
+    _set_parent_death_signal(signal.SIGTERM)
+
+
+def _tie_to_launcher_linux() -> bool:
+    """Standalone binary on Linux: end with the PyInstaller launcher.
+
+    The onefile binary runs this code in a child of a launcher from the same
+    exe. If the launcher is killed, this process gets SIGTERM, and ssh (see
+    _ssh_preexec) follows it. Python installs and other parents: no change.
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+    parent = os.getppid()
+    try:
+        parent_exe = os.readlink(f"/proc/{parent}/exe")
+    except OSError:
+        return False
+    if os.path.realpath(parent_exe) != os.path.realpath(sys.executable):
+        return False
+    tied = _set_parent_death_signal(signal.SIGTERM)
+    if tied and os.getppid() != parent:  # the launcher died before we asked
+        os._exit(1)
+    return tied
 
 
 def _process_image(kernel32, process) -> Optional[str]:
@@ -880,11 +931,12 @@ def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
     _kill_children_with_this_process()
     if not can_prompt:
         args = [args[0], "-o", "BatchMode=yes", *args[1:]]
+    extra = {"preexec_fn": _ssh_preexec} if sys.platform.startswith("linux") else {}
     if not keep_alive:
-        return subprocess.call(args, env=env)
+        return subprocess.call(args, env=env, **extra)
     from colab_cli.common import state
 
-    proc = subprocess.Popen(args, env=env)
+    proc = subprocess.Popen(args, env=env, **extra)
     return wait_with_keep_alive(proc, state.client, session.endpoint)
 
 
@@ -1276,6 +1328,8 @@ def ssh(
     if not proxy_mode:
         _require_ssh_key(identity)
     if cmd:
+        # Remote arguments: undo Git Bash's rewrite of /content/... paths.
+        cmd = undo_msys_args(cmd)
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
         _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)

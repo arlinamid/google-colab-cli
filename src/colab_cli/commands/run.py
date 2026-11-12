@@ -32,6 +32,9 @@ See docs/05_run_command.md for the full design.
 
 import datetime
 import os
+import sys
+import tempfile
+import time
 import uuid
 from typing import List, Optional
 
@@ -47,6 +50,7 @@ from colab_cli.client import (
     TooManyAssignmentsError,
 )
 from colab_cli.commands.execution import (
+    add_seen_before,
     SECRET_HELP,
     _build_env_prelude,
     _parse_env_vars,
@@ -58,9 +62,18 @@ from colab_cli.commands.session import (
     resolve_runtime_options,
 )
 from colab_cli.secrets import resolve_secrets
-from colab_cli.runtime import ColabRuntime
+from colab_cli.results import (
+    Block,
+    JsonEmitter,
+    build_cell_record,
+    build_summary,
+    failure_record,
+    history_fields,
+)
+from colab_cli.cost import CostMeter
+from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code, is_terminal_error
+from colab_cli.utils import get_status_code, is_terminal_error, undo_msys_args
 
 
 def _build_script_payload(
@@ -271,6 +284,17 @@ def run_command(
             ),
         ),
     ] = False,
+    detach: Annotated[
+        bool,
+        typer.Option(
+            "--detach",
+            help=(
+                "Start the script as a background job (`colab job`) on the new "
+                "runtime and return at once; the runtime keeps running until "
+                "you `colab stop` it. --budget then stops the job on the runtime."
+            ),
+        ),
+    ] = False,
     timeout: Annotated[
         Optional[float],
         typer.Option(
@@ -295,6 +319,39 @@ def run_command(
         Optional[List[str]],
         typer.Option("--secret", help=SECRET_HELP),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            envvar="COLAB_CLI_JSON",
+            help=(
+                "For scripts and AI agents: print a JSON record for the "
+                "script (output, error with its file line, diagnosis and "
+                "next steps) and a summary; the script's output goes into "
+                "the record. Put it before the script path. The exit code "
+                "stays the script's; 3 lost session, 4 timeout. Also set by "
+                "COLAB_CLI_JSON=1."
+            ),
+        ),
+    ] = False,
+    output_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output-dir",
+            help="With --json: where to save images (default: a new temp folder).",
+        ),
+    ] = None,
+    budget: Annotated[
+        Optional[float],
+        typer.Option(
+            "--budget",
+            help=(
+                "Stop the script once it has used about this many compute units, "
+                "estimated from the account's hourly rate at the start. Put it "
+                "before the script path. Exit code 5."
+            ),
+        ),
+    ] = None,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -307,7 +364,8 @@ def run_command(
     """
     from colab_cli.common import state
 
-    script_args = script_args or []
+    # The script runs on the runtime: its path arguments are remote paths.
+    script_args = undo_msys_args(script_args or [])
     script_args, inline_env = _extract_env_args_from_script_args(script_args)
     env_vars = _parse_env_vars([*(env or []), *inline_env])
     env_vars.update(resolve_secrets(secret, state.history))
@@ -402,11 +460,51 @@ def run_command(
             "via": "run",
         },
     )
+    if detach:
+        from colab_cli.commands.job import launch_job
+        from colab_cli.jobs import job_argv
+
+        typer.echo(f"[colab] Session READY ({name}). Starting {script} as a job...", err=True)
+        launch_job(
+            state, name, s, file=script, source=read_script(script),
+            argv=job_argv(script, None, script_args), env_vars=env_vars,
+            name=None, budget=budget, json_output=json_output,
+        )
+        typer.echo(
+            f"[colab] The runtime keeps running after the job; stop it with "
+            f"`colab stop -s {name}`.",
+            err=json_output,
+        )
+        return
     typer.echo(f"[colab] Session READY ({name}). Executing {script}...", err=True)
 
     # ----- Execute the script -------------------------------------------------
     exit_code = 0
     cleanup_reason = "run_completed"
+    emitter = JsonEmitter(sys.stdout) if json_output else None
+    records = []
+    started = time.monotonic()
+    # Next steps can name the session only if it still exists afterwards.
+    live_session = name if keep else None
+    image_dir_used = None
+
+    def image_dir():
+        nonlocal image_dir_used
+        if image_dir_used is None:
+            image_dir_used = output_dir or tempfile.mkdtemp(prefix="colab-out-")
+        return image_dir_used
+
+    meter = None
+    run_limit = None
+    if json_output or budget is not None:
+        meter = CostMeter(state.client, accelerator=accelerator.value)
+    if budget is not None:
+        run_limit = meter.seconds_for(budget)
+        if run_limit is None:
+            typer.echo(
+                "[colab] --budget not enforced: no compute-unit rate is available.",
+                err=True,
+            )
 
     def on_started(kid):
         s.kernel_id = kid
@@ -440,6 +538,18 @@ def run_command(
                     err=True,
                 )
                 state.prune_session(name)
+                if emitter:
+                    records.append(failure_record(
+                        "session_lost", str(e), index=0, cell_id=None,
+                        block=Block(label=script, file=script), session=None,
+                        duration_s=0,
+                    ))
+                    emitter.emit(records[-1])
+                    emitter.emit(build_summary(
+                        records, duration_s=time.monotonic() - started,
+                        session=name, exit_code=3, output_dir=None,
+                    ))
+                    raise typer.Exit(3)
                 raise typer.Exit(1)
             raise
 
@@ -452,10 +562,46 @@ def run_command(
         )
         state.store.add(s)
 
+        source = _script_block(script, payload)
+        run_started = time.monotonic()
+        run_kwargs = {
+            # With --json the script's output goes into the record only.
+            "output_hook": (lambda o: None) if emitter else _make_run_output_hook(),
+            "timeout": timeout,
+        }
+        if run_limit is not None:
+            run_kwargs["run_limit"] = max(run_limit - (time.monotonic() - started), 0.001)
         try:
-            outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
-            )
+            outputs = runtime.execute_code(payload, **run_kwargs)
+        except RunLimitExceeded as e:
+            exit_code = 5
+            cleanup_reason = "run_failed"
+            if emitter:
+                records.append(failure_record(
+                    "budget_reached", str(e), index=0, cell_id=None, block=source,
+                    session=live_session, duration_s=time.monotonic() - run_started,
+                    budget=budget,
+                ))
+                emitter.emit(records[-1])
+            else:
+                typer.echo(
+                    f"[colab] Budget of {budget:g} compute units reached "
+                    "(estimated); the script was interrupted.",
+                    err=True,
+                )
+        except (TimeoutError, SessionConnectionLost) as e:
+            exit_code = 1
+            cleanup_reason = "run_failed"
+            if not emitter:
+                raise
+            kind = "idle_timeout" if isinstance(e, TimeoutError) else "session_lost"
+            exit_code = 4 if kind == "idle_timeout" else 3
+            records.append(failure_record(
+                kind, str(e) or kind, index=0, cell_id=None, block=source,
+                session=live_session, duration_s=time.monotonic() - run_started,
+                timeout=timeout,
+            ))
+            emitter.emit(records[-1])
         except Exception:
             # Genuine transport-level failure. Cleanup still happens via the
             # outer finally; surface non-zero exit so callers/CI notice.
@@ -466,11 +612,22 @@ def run_command(
             exit_code = _exit_code_from_outputs(outputs)
             if exit_code != 0:
                 cleanup_reason = "run_failed"
-            state.history.log_event(
-                name,
-                "execution",
-                {"code": payload, "outputs": outputs, "via": "run"},
-            )
+            run_duration = time.monotonic() - run_started
+            event = {
+                "code": payload, "outputs": outputs, "via": "run",
+                **history_fields(outputs, block=source, duration_s=run_duration,
+                                 exit_code=exit_code),
+            }
+            if emitter:
+                records.append(build_cell_record(
+                    outputs, index=0, cell_id=None, block=source,
+                    duration_s=run_duration,
+                    session=live_session, image_dir=image_dir,
+                    exit_code=exit_code,
+                ))
+                add_seen_before(records[-1], state.history)
+                emitter.emit(records[-1])
+            state.history.log_event(name, "execution", event)
     finally:
         s.running = None
         state.store.update_if_present(s)
@@ -483,8 +640,28 @@ def run_command(
         if not keep:
             _teardown(name, s, reason=cleanup_reason)
 
+    if emitter:
+        duration = time.monotonic() - started
+        emitter.emit(build_summary(
+            records, duration_s=duration, session=name,
+            exit_code=exit_code, output_dir=image_dir_used,
+            cost=meter.block(duration) if meter else None,
+        ))
     if exit_code != 0:
         raise typer.Exit(exit_code)
+
+
+def _script_block(script: str, payload: str) -> Block:
+    """Where the script's lines are inside the payload sent to the kernel."""
+    body = read_script(script)
+    stripped = _strip_shebang(body)
+    return Block(
+        label=script,
+        file=script,
+        code=stripped,
+        prelude_lines=payload[: len(payload) - len(stripped)].count("\n"),
+        first_line=1 + body[: len(body) - len(stripped)].count("\n"),
+    )
 
 
 def _teardown(name: str, s: SessionState, *, reason: str) -> None:

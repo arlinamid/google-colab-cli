@@ -217,3 +217,33 @@ def test_http_error_message_hides_the_proxy_token(mock_request, client):
     assert "SECRET-PROXY-TOKEN" not in message
     assert "500" in message
     assert "up.txt" in message
+
+
+@patch("colab_cli.contents.requests.request")
+def test_read_text_handles_text_and_base64(mock_request, client):
+    resp = MagicMock(spec=Response)
+    resp.status_code = 200
+    resp.json.return_value = {"type": "file", "format": "text", "content": "a\nb\n"}
+    mock_request.return_value = resp
+    assert client.read_text("/content/x.txt") == "a\nb\n"
+
+    resp.json.return_value = {
+        "type": "file", "format": "base64",
+        "content": base64.b64encode("ünnep".encode()).decode(),
+    }
+    assert client.read_text("/content/x.bin") == "ünnep"
+
+
+@patch("colab_cli.contents.requests.request")
+def test_write_text_puts_a_text_file(mock_request, client):
+    resp = MagicMock(spec=Response)
+    resp.status_code = 200
+    resp.json.return_value = {}
+    mock_request.return_value = resp
+
+    client.write_text("/content/.colab-jobs/j/stop", "")
+
+    method, url = mock_request.call_args.args
+    assert method == "PUT" and url.endswith("/api/contents/content/.colab-jobs/j/stop")
+    payload = mock_request.call_args.kwargs["json"]
+    assert payload["format"] == "text" and payload["content"] == "" and payload["name"] == "stop"
