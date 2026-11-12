@@ -1,33 +1,53 @@
 name: CI
 
-# macOS runners are scarce (a few concurrent jobs per account), so avoid
-# duplicate runs: branch pushes only (tags go to release.yml), no separate
-# pull_request run (the push run's checks show on a PR from this repository).
+# Keep the load small. GitHub disabled Actions on this fork in November 2026,
+# when every branch push started 11 jobs, three of them on macOS and three of
+# them PyInstaller builds. Now:
+# - push to any branch: lint and unit tests on Linux and Windows, Python 3.12
+#   (2 jobs); nothing for changes to docs, Markdown or examples only;
+# - pull request to main, when opened, reopened or marked ready: the full test
+#   matrix with macOS, and a wheel install check (6 jobs); later pushes to the
+#   PR branch run the 2 push jobs only;
+# - manual run (Actions tab or `gh workflow run CI --ref BRANCH`): the full
+#   matrix, plus the three standalone binaries with `-f binaries=true`. Run it
+#   once before merging a release PR. Tags build the binaries in release.yml.
 on:
   push:
     branches: ["**"]
+    paths-ignore: ["docs/**", "**/*.md", "examples/**"]
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, ready_for_review]
+    paths-ignore: ["docs/**", "**/*.md", "examples/**"]
   workflow_dispatch:
+    inputs:
+      binaries:
+        description: "Also build and run the standalone binaries (3 jobs, one on macOS)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest (macOS 26 arm64) jobs often wait for a long time or are
-        # cancelled ("not acquired by Runner"): GitHub reports capacity
-        # constraints for macOS arm64 runners. macos-15-intel is a pinned GA
-        # x64 image outside that pool; the code is pure Python.
-        os: [ubuntu-latest, macos-15-intel, windows-latest]
-        python: ["3.12", "3.13"]
+        # Push: Linux and Windows on 3.12. Pull request and manual runs: all
+        # three OSes. macos-latest (macOS 26 arm64) jobs often wait for a long
+        # time or are cancelled ("not acquired by Runner"): GitHub reports
+        # capacity constraints for macOS arm64 runners. macos-15-intel is a
+        # pinned GA x64 image outside that pool; the code is pure Python.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macos-15-intel", "windows-latest"]') }}
+        python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.13"]') }}
         exclude:
           # One Python version is enough on macOS; it saves a scarce runner.
           - os: macos-15-intel
@@ -57,13 +77,17 @@ jobs:
         run: uv run pytest tests/ -q
 
   build:
+    # The wheel is pure Python: building and installing it on Linux is
+    # enough here; release.yml also installs it on Windows.
     name: Build and install (${{ matrix.os }})
+    if: github.event_name != 'push'
     needs: test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,9 +124,12 @@ jobs:
           path: dist/
 
   binary:
+    # Only on request: `gh workflow run CI --ref BRANCH -f binaries=true`.
     name: Standalone binary (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && inputs.binaries
     needs: test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

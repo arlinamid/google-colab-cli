@@ -16,6 +16,7 @@ jobs:
   build:
     name: Build release artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +48,7 @@ jobs:
     name: Install and run (${{ matrix.os }})
     needs: build
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +82,7 @@ jobs:
   binaries:
     name: Standalone binary (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +156,7 @@ jobs:
     name: Publish GitHub Release
     needs: [smoke, binaries]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
