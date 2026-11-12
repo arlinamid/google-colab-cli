@@ -6,7 +6,7 @@ log:
 2026-11-12: Initial design of the agent feedback loop (A-D): result envelope with diagnosis and next actions, detached jobs with progress, kernel inspection, and cost feedback. Design only; no code yet.
 ---
 
-# Design: Agent Feedback Loop (`--json`, `colab job`, `colab inspect`, cost)
+# Design: Agent Feedback Loop (`--json`, `colab job`, `colab inspect`, cost, history)
 
 ## Motivation
 
@@ -51,6 +51,7 @@ to them, so a later upstream merge stays a superset instead of a conflict.
 | B | `colab job` detached runs with progress, metrics and wait/stop (**implemented**) | A |
 | C | `colab inspect` kernel and machine state (**implemented**) | A |
 | D | Cost block, `--budget`, `colab usage --json` (**implemented**) | A (B for budgets on jobs) |
+| E | `colab history errors` / `stats`, `seen_before` with the last fix | A |
 
 Each phase is its own PR on top of `feat/agent-feedback`.
 
@@ -318,6 +319,73 @@ must stop with exit 5 (CPU rate is low but non-zero; verify the actual rate
 first with `colab usage --json`).
 
 ---
+
+## E. Learning from history (`colab history`, `seen_before`)
+
+The CLI already logs every execution (code, outputs, errors) per session in
+`~/.config/colab-cli/history/*.jsonl`. Phase E turns that log into feedback
+that improves with use: an agent that hits an error learns whether it has
+seen it before and what fixed it then, and can estimate time and cost before
+it runs something again. Everything stays local; the history's secret
+redaction still applies.
+
+### Surface
+
+```
+colab history errors [-s NAME] [--since 7d] [--limit 20] [--json]
+colab history stats  [FILE] [-s NAME] [--since 30d] [--json]
+```
+
+- `errors`: past failures grouped by signature, most recent first: `code`
+  (diagnosis), `ename`, `where` (file:line or notebook cell), `evalue`
+  (last), `count`, `sessions`, `first_seen`, `last_seen`, `last_fix`.
+- `stats`: per file (or stdin/notebook label): `runs`, `failures`,
+  `success_rate`, `median_duration_s`, `max_duration_s`,
+  `median_cost_cu` (when logged), `last_run`, `top_errors` (codes).
+- In every `--json` cell record with an error, `diagnosis.seen_before`:
+  `{"count", "last_seen", "sessions", "last_fix"}`, or null if new.
+
+### Signature
+
+`code + ename + where`, where `where` is the mapped location
+(`train.py:42`, file basename only, or `nb.ipynb#cell3:2`) and, without a
+location, the `evalue` with numbers, hex ids and paths normalised (so
+"No module named 'x'" groups by module, "Errno 28" groups as one).
+
+### What fixed it (`last_fix`)
+
+After a failure, the first later successful execution of the same file or
+label in the same session (within 24 h) counts as the fix. `last_fix` gives
+`after_s`, `attempts` (failed runs in between), `code_changed` (the source
+differed from the failing run), and `steps`: packages installed in between
+(from `colab install` events and `!pip install` / `%pip install` lines in
+executed code) and files uploaded (`colab upload`). Example:
+
+```json
+"seen_before": {"count": 3, "last_seen": "2026-11-10T14:02:11+00:00",
+  "sessions": ["demo", "w2"],
+  "last_fix": {"after_s": 95.0, "attempts": 0, "code_changed": false,
+    "steps": [{"install": ["torchvision"]}]}}
+```
+
+### Richer execution events
+
+From this phase on, `execution` events (exec and run, with or without
+`--json`) also store `status`, `file`, `label`, `cell`, `duration_s`,
+`error` (`ename`, `evalue`, `location`), `diagnosis` (code) and `cost_cu`
+(when an estimate exists). Older events are re-diagnosed from their stored
+outputs, so the existing history is useful at once.
+
+### Tests
+
+`tests/test_experience.py` builds synthetic histories: grouping and
+signatures, re-diagnosing old events, fix detection (install between, code
+change, attempts, other session not counted, 24 h window), stats (median,
+success rate), `--since` parsing. `tests/test_history_cmd.py` covers the
+commands and `seen_before` in exec records. Live:
+`integration/repro_history/test.sh` fails on a missing module, installs it,
+succeeds, then checks that the next failure of the same kind reports
+`seen_before.last_fix.steps == [{"install": [...]}]`.
 
 ## Rollout
 

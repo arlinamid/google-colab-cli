@@ -31,6 +31,7 @@ from colab_cli.commands import (
     automation,
     git,
     hf,
+    history_cmd,
     inspect,
     job,
     run,
@@ -171,6 +172,7 @@ files.register(app)
 automation.register(app)
 git.register(app)
 hf.register(app)
+history_cmd.register(app)
 inspect.register(app)
 job.register(app)
 run.register(app)

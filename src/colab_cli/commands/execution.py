@@ -33,6 +33,7 @@ from colab_cli.results import (
     build_cell_record,
     build_summary,
     failure_record,
+    history_fields,
 )
 from colab_cli.cost import CostMeter
 from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
@@ -563,21 +564,23 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                 break
             if "cell" in block:
                 save_output(outputs, block["cell"])
+            block_duration = time.monotonic() - block_started
             event = {
                 "code": code,
                 "outputs": outputs,
                 "cell_index": (block["number"] - 1 if is_nb else None),
                 "cell_id": block.get("id"),
+                **history_fields(outputs, block=source, duration_s=block_duration),
             }
             if emitter:
                 rec = build_cell_record(
                     outputs, index=i, cell_id=block.get("id"), block=source,
-                    duration_s=time.monotonic() - block_started, session=name,
+                    duration_s=block_duration, session=name,
                     image_dir=image_dir,
                 )
+                add_seen_before(rec, state.history)
                 emitter.emit(rec)
                 records.append(rec)
-                event["diagnosis"] = rec["diagnosis"]["code"] if rec["diagnosis"] else None
             state.history.log_event(name, "execution", event)
             if any(o.get("output_type") == "error" for o in outputs or []):
                 failed.append(block["label"])
@@ -618,6 +621,29 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
         raise typer.Exit(exit_code)
     if failed:
         raise typer.Exit(1)
+
+
+def add_seen_before(rec, history) -> None:
+    """Phase E: say whether this failure happened before and what fixed it.
+
+    Reads the local history; any problem with it leaves seen_before null
+    rather than failing the run.
+    """
+    diagnosis = rec.get("diagnosis")
+    if not diagnosis:
+        return
+    diagnosis["seen_before"] = None
+    error = rec.get("error") or {}
+    try:
+        from colab_cli.experience import load_events, seen_before
+
+        diagnosis["seen_before"] = seen_before(
+            load_events(history),
+            {"diagnosis": diagnosis["code"], "ename": error.get("ename"),
+             "evalue": error.get("evalue")},
+        )
+    except Exception:
+        pass
 
 
 def _output_hook(emitter, stream_events, index, output_image):

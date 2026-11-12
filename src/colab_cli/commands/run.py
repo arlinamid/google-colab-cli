@@ -50,6 +50,7 @@ from colab_cli.client import (
     TooManyAssignmentsError,
 )
 from colab_cli.commands.execution import (
+    add_seen_before,
     SECRET_HELP,
     _build_env_prelude,
     _parse_env_vars,
@@ -67,6 +68,7 @@ from colab_cli.results import (
     build_cell_record,
     build_summary,
     failure_record,
+    history_fields,
 )
 from colab_cli.cost import CostMeter
 from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
@@ -582,17 +584,21 @@ def run_command(
             exit_code = _exit_code_from_outputs(outputs)
             if exit_code != 0:
                 cleanup_reason = "run_failed"
-            event = {"code": payload, "outputs": outputs, "via": "run"}
+            run_duration = time.monotonic() - run_started
+            event = {
+                "code": payload, "outputs": outputs, "via": "run",
+                **history_fields(outputs, block=source, duration_s=run_duration,
+                                 exit_code=exit_code),
+            }
             if emitter:
                 records.append(build_cell_record(
                     outputs, index=0, cell_id=None, block=source,
-                    duration_s=time.monotonic() - run_started,
+                    duration_s=run_duration,
                     session=live_session, image_dir=image_dir,
                     exit_code=exit_code,
                 ))
+                add_seen_before(records[-1], state.history)
                 emitter.emit(records[-1])
-                diagnosis = records[-1]["diagnosis"]
-                event["diagnosis"] = diagnosis["code"] if diagnosis else None
             state.history.log_event(name, "execution", event)
     finally:
         s.running = None

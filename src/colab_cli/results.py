@@ -129,6 +129,56 @@ def map_location(traceback: List[str], block: Block) -> Optional[Dict[str, Any]]
     }
 
 
+def _describe_errors(errors, block, session, exit_code):
+    """The error and diagnosis of a block, from its error outputs."""
+    if exit_code is not None:
+        exits = [e for e in errors if e.get("ename") == "SystemExit"]
+        others = [e for e in errors if e.get("ename") != "SystemExit"]
+        errors = others or (exits if exit_code != 0 else [])
+    if not errors:
+        return None, None
+    e = errors[-1]
+    tb = strip_ansi("\n".join(e.get("traceback") or []))
+    error = {
+        "ename": e.get("ename", "Error"),
+        "evalue": e.get("evalue", ""),
+        "traceback": _tail(tb)[0],
+        "location": map_location(e.get("traceback") or [], block),
+    }
+    return error, diagnose(error["ename"], error["evalue"], tb, session=session, file=block.file)
+
+
+def history_fields(
+    outputs: List[Dict[str, Any]],
+    *,
+    block: Block,
+    duration_s: float,
+    exit_code: Optional[int] = None,
+    cost_cu: Optional[float] = None,
+) -> Dict[str, Any]:
+    """What an `execution` history event stores besides code and outputs.
+
+    Used by `colab history` and `seen_before` (phase E), with or without
+    --json.
+    """
+    errors = [o for o in outputs or [] if o.get("output_type") == "error"]
+    error, diagnosis = _describe_errors(errors, block, None, exit_code)
+    fields = {
+        "status": "error" if error else "ok",
+        "file": block.file,
+        "label": block.label,
+        "cell": block.cell,
+        "duration_s": round(duration_s, 2),
+        "error": (
+            {k: error[k] for k in ("ename", "evalue", "location")} if error else None
+        ),
+        "diagnosis": diagnosis["code"] if diagnosis else None,
+    }
+    if cost_cu is not None:
+        fields["cost_cu"] = cost_cu
+    return fields
+
+
 def _tail(text: str):
     if len(text) > MAX_TEXT:
         return text[-MAX_TEXT:], True
@@ -189,24 +239,7 @@ def build_cell_record(
         elif kind == "error":
             errors.append(out)
 
-    if exit_code is not None:
-        exits = [e for e in errors if e.get("ename") == "SystemExit"]
-        others = [e for e in errors if e.get("ename") != "SystemExit"]
-        errors = others or (exits if exit_code != 0 else [])
-
-    error = diagnosis = None
-    if errors:
-        e = errors[-1]
-        tb = strip_ansi("\n".join(e.get("traceback") or []))
-        error = {
-            "ename": e.get("ename", "Error"),
-            "evalue": e.get("evalue", ""),
-            "traceback": _tail(tb)[0],
-            "location": map_location(e.get("traceback") or [], block),
-        }
-        diagnosis = diagnose(
-            error["ename"], error["evalue"], tb, session=session, file=block.file
-        )
+    error, diagnosis = _describe_errors(errors, block, session, exit_code)
 
     stdout, stdout_cut = _tail("".join(streams["stdout"]))
     stderr, stderr_cut = _tail("".join(streams["stderr"]))
