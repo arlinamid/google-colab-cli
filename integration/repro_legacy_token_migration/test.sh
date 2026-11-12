@@ -36,6 +36,14 @@ TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 TEST_HOME="$TMP_DIR/home"
+# Python reads USERPROFILE, not HOME, on Windows; give it a native path.
+TEST_USERPROFILE="$TEST_HOME"
+if command -v cygpath >/dev/null 2>&1; then
+    TEST_USERPROFILE=$(cygpath -w "$TEST_HOME")
+fi
+# The venv on Windows has python.exe only, no python3.
+PYTHON=python3
+command -v python3 >/dev/null 2>&1 || PYTHON=python
 LEGACY="$TEST_HOME/.config/colab-cli/token.json"
 KEYRING_FILE="$TMP_DIR/keyring.json"
 KEY="google-colab-cli/oauth_token"
@@ -77,7 +85,7 @@ fake_token() {
 }
 
 keyring_access_token() {
-    python3 -c "import json, sys; d = json.load(open(sys.argv[1])); print(json.loads(d[sys.argv[2]])['token'])" "$KEYRING_FILE" "$KEY" 2>/dev/null
+    "$PYTHON" -c "import json, sys; d = json.load(open(sys.argv[1])); print(json.loads(d[sys.argv[2]])['token'])" "$KEYRING_FILE" "$KEY" 2>/dev/null
 }
 
 reset_state() {
@@ -89,7 +97,7 @@ reset_state() {
 # Runs the CLI with the given keyring backend; output goes to $OUT.
 run_colab() {
     OUT="$TMP_DIR/out.log"
-    HOME="$TEST_HOME" PYTHONPATH="$TMP_DIR/mods" FILE_KEYRING_PATH="$KEYRING_FILE" \
+    HOME="$TEST_HOME" USERPROFILE="$TEST_USERPROFILE" PYTHONPATH="$TMP_DIR/mods" FILE_KEYRING_PATH="$KEYRING_FILE" \
         PYTHON_KEYRING_BACKEND="$1" PYTHONUNBUFFERED=1 \
         timeout 60 uv run colab --auth=oauth2 sessions < /dev/null > "$OUT" 2>&1
 }
@@ -115,7 +123,7 @@ check "legacy token.json deleted" '[ ! -f "$LEGACY" ]'
 
 echo "[*] Scenario 2: keyring already has a token, legacy token.json present"
 reset_state
-python3 -c "import json, sys; json.dump({sys.argv[2]: sys.argv[3]}, open(sys.argv[1], 'w'))" \
+"$PYTHON" -c "import json, sys; json.dump({sys.argv[2]: sys.argv[3]}, open(sys.argv[1], 'w'))" \
     "$KEYRING_FILE" "$KEY" "$(fake_token keyring)"
 run_colab filekeyring.Keyring
 check "no OAuth prompt" '! grep -q "To authorize colab-cli" "$OUT"'

@@ -18,6 +18,7 @@ Run from the repository with `uv run python integration/repro_windows_ssh/test.p
 Exit 77 means cached OAuth credentials are missing; no runtime is allocated.
 """
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -25,7 +26,9 @@ import sys
 import tempfile
 import uuid
 
-from colab_cli.auth import TOKEN_CONFIG_PATH
+import keyring
+
+from colab_cli.auth import KEYRING_SERVICE_NAME, KEYRING_USERNAME
 from colab_cli.commands.ssh import _proxy_command, _ssh_base_args
 from colab_cli.common import State
 
@@ -43,7 +46,8 @@ def main():
     if sys.platform != "win32":
         print("SKIP: requires native Windows and Windows OpenSSH.")
         return 77
-    if not Path(TOKEN_CONFIG_PATH).is_file():
+    # The OAuth2 token lives in the OS keyring (token.json is legacy).
+    if not keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME):
         print("SKIP: no cached OAuth2 credentials. First run:")
         print("  uv run colab --auth=oauth2 sessions")
         return 77
@@ -62,6 +66,20 @@ def main():
             subprocess.run(
                 ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key],
                 check=True,
+                timeout=30,
+            )
+            # Windows OpenSSH ignores a key that others can read ("bad
+            # permissions"), and a temp folder's inherited ACL allows that.
+            subprocess.run(
+                [
+                    "icacls",
+                    key,
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{os.environ['USERNAME']}:F",
+                ],
+                check=True,
+                capture_output=True,
                 timeout=30,
             )
             colab("new", "-s", name)
