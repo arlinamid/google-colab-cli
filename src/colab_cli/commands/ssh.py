@@ -78,6 +78,8 @@ _CONNECT_TIMEOUT_SEC = 30
 # Handle of the kill-on-close job this process is in (Windows); kept open for
 # the life of the process. See _kill_children_with_this_process.
 _JOB_HANDLE = None
+# _JOB_HANDLE when the standalone binary's launcher holds the job handle.
+_JOB_HELD_BY_LAUNCHER = "launcher"
 
 # Set by the colab process that starts ssh, for its ProxyCommand child:
 # whether a person can answer a passphrase prompt. The child's stdin is the ssh
@@ -154,6 +156,7 @@ def _kill_children_with_this_process() -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateJobObjectW.restype = wintypes.HANDLE
         kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.restype = wintypes.HANDLE
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
             return
@@ -169,10 +172,81 @@ def _kill_children_with_this_process() -> None:
             wintypes.HANDLE(job), wintypes.HANDLE(kernel32.GetCurrentProcess())
         ):
             _JOB_HANDLE = job
+            if _hand_job_to_launcher(kernel32, job):
+                _JOB_HANDLE = _JOB_HELD_BY_LAUNCHER
         else:
             kernel32.CloseHandle(wintypes.HANDLE(job))
     except Exception:  # Best effort: never block ssh over cleanup.
         pass
+
+
+def _process_image(kernel32, process) -> Optional[str]:
+    """Full exe path of an open process handle, or None (Windows)."""
+    import ctypes
+
+    size = ctypes.c_ulong(32768)
+    buf = ctypes.create_unicode_buffer(size.value)
+    if not kernel32.QueryFullProcessImageNameW(
+        ctypes.c_void_p(process), 0, buf, ctypes.byref(size)
+    ):
+        return None
+    return buf.value
+
+
+def _hand_job_to_launcher(kernel32, job) -> bool:
+    """Standalone binary: give the only handle of ``job`` to its launcher.
+
+    The PyInstaller onefile binary is a launcher process that runs this code
+    as its child, from the same exe. A forced kill of the launcher (a closed
+    terminal tab, ``taskkill /F``) does not end the child, so a job handle
+    held here stays open and ssh keeps running. Once the launcher holds the
+    only handle, the job closes when the launcher ends in any way, which
+    ends this process, ssh and its ProxyCommand. When the launcher exits
+    normally this process has already finished.
+
+    Returns:
+      True if the launcher now holds the handle and this process closed its
+      own; False (nothing changed) for a Python install, a parent that is
+      another program, or any failure.
+    """
+    import ctypes
+
+    if not getattr(sys, "frozen", False):
+        return False
+    process_dup_handle = 0x0040
+    process_query_limited_information = 0x1000
+    duplicate_same_access = 0x0002
+    parent = kernel32.OpenProcess(
+        process_dup_handle | process_query_limited_information,
+        False,
+        os.getppid(),
+    )
+    if not parent:
+        return False
+    try:
+        image = _process_image(kernel32, parent)
+        same_exe = image is not None and os.path.normcase(
+            os.path.abspath(image)
+        ) == os.path.normcase(os.path.abspath(sys.executable))
+        if not same_exe:
+            return False
+        copy = ctypes.c_void_p()
+        # Not DUPLICATE_CLOSE_SOURCE: it closes the source even on failure,
+        # and closing the last handle would kill this process.
+        if not kernel32.DuplicateHandle(
+            ctypes.c_void_p(kernel32.GetCurrentProcess()),
+            ctypes.c_void_p(job),
+            ctypes.c_void_p(parent),
+            ctypes.byref(copy),
+            0,
+            False,
+            duplicate_same_access,
+        ):
+            return False
+        kernel32.CloseHandle(ctypes.c_void_p(job))
+        return True
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(parent))
 
 
 def _can_prompt_for_passphrase() -> bool:
