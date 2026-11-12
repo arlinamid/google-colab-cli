@@ -101,5 +101,28 @@ class ContentsClient:
         with open(local_path, "wb") as f:
             f.write(content_bytes)
 
+    def read_text(self, remote_path: str) -> str:
+        """The content of a remote file as text (UTF-8)."""
+        data = self._request("GET", remote_path, params={"content": "1"})
+        if data.get("type") == "directory":
+            raise IsADirectoryError(f"Not a file: {remote_path}")
+        content = data.get("content", "")
+        if data.get("format") == "base64":
+            return base64.b64decode(content).decode("utf-8", errors="replace")
+        if data.get("format") == "json" or not isinstance(content, str):
+            return json.dumps(content)
+        return content
+
+    def write_text(self, remote_path: str, text: str):
+        """Create or replace a remote text file."""
+        payload = {
+            "name": remote_path.split("/")[-1],
+            "path": remote_path,
+            "type": "file",
+            "format": "text",
+            "content": text,
+        }
+        return self._request("PUT", remote_path, json_data=payload)
+
     def rm(self, remote_path: str):
         self._request("DELETE", remote_path)

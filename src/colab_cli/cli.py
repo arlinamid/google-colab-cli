@@ -31,6 +31,7 @@ from colab_cli.commands import (
     automation,
     git,
     hf,
+    job,
     run,
     secret,
     share,
@@ -169,6 +170,7 @@ files.register(app)
 automation.register(app)
 git.register(app)
 hf.register(app)
+job.register(app)
 run.register(app)
 secret.register(app)
 share.register(app)
