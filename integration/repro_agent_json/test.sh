@@ -28,7 +28,10 @@
 has_oauth2_token() {
     timeout 10 uv run python -c "import sys, keyring; sys.exit(0 if keyring.get_password('google-colab-cli', 'oauth_token') else 1)" > /dev/null 2>&1
 }
-if has_oauth2_token; then
+# COLAB_AUTH=oauth2|adc skips the detection (e.g. a token.json without a keyring).
+if [ -n "$COLAB_AUTH" ]; then
+    AUTH_FLAGS="--auth=$COLAB_AUTH"
+elif has_oauth2_token; then
     AUTH_FLAGS="--auth=oauth2"
 elif command -v gcloud > /dev/null && gcloud auth application-default print-access-token > /dev/null 2>&1; then
     AUTH_FLAGS="--auth=adc"
@@ -41,7 +44,8 @@ echo "[*] Using $AUTH_FLAGS"
 TMP_DIR=$(mktemp -d)
 SESSION_FILE="$TMP_DIR/sessions.json"
 NAME="repro-json-$(date +%s)"
-COLAB="uv run colab $AUTH_FLAGS --config $SESSION_FILE"
+# COLAB_CMD runs another build, e.g. the standalone binary: COLAB_CMD=dist/bin/colab
+COLAB="${COLAB_CMD:-uv run colab} $AUTH_FLAGS --config $SESSION_FILE"
 FAILURES=0
 
 cleanup() {
