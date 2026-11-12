@@ -80,3 +80,15 @@ def default_ssh_key(tmp_path_factory, monkeypatch):
     (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAATEST test@host\n")
     monkeypatch.setattr(ssh, "_ssh_dir", lambda: ssh_dir)
     return ssh_dir
+
+
+@pytest.fixture(autouse=True)
+def plain_rich_output(monkeypatch):
+    """Keep Typer's error panels free of ANSI colour codes, as on a terminal.
+
+    Typer forces colour when GITHUB_ACTIONS (or FORCE_COLOR/PY_COLORS) is
+    set, which splits words such as "--gpu" with escape codes in CI only.
+    """
+    import typer.rich_utils
+
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", None)
