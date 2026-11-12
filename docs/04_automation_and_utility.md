@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-12: `colab usage --json` prints one `colab.v1` record of type `usage` (`balance_cu`, `rate_cu_per_hour`, `hours_left_at_rate`, `assignments`); agents use it with the cost feedback of docs/08_agent_feedback.md.
 2026-11-03: A uv tool install is detected on Windows too (`\uv\tools\` paths), so the upgrade hint and `--install` use uv there instead of pip.
 2026-11-03: The update check watches two sources: this fork's latest GitHub release (offered and installed by `colab update --install`, as its wheel) and Google's PyPI package (only announced when it is newer than the Google version the install is based on, never installed: that would drop the fork's changes).
 2026-11-03: Added section 11 (secrets, Hugging Face, clone, share, keepalive; details in 07_secrets_tunnels_integrations.md). `run_automation` now returns its outputs, can run in the session's own kernel (`session_kernel=True`), and `HistoryLogger.add_redaction` writes registered secret values as `***`.
@@ -177,6 +178,11 @@ How each provider supplies the scope:
     backend as `colab new`.
 -   **Output**: `Current balance: … compute units`, `Usage rate: {rate}/hr`
     (aggregate CU/hour across assigned VMs), `Active assignments: N`.
+-   **`--json`** (or `COLAB_CLI_JSON=1`): one record, `{"schema": "colab.v1",
+    "type": "usage", "balance_cu", "rate_cu_per_hour", "hours_left_at_rate",
+    "assignments"}`; `hours_left_at_rate` is `null` when the rate is 0. The
+    cost blocks and `--budget` of `exec`, `run` and `job` use the same rate
+    (see [08_agent_feedback.md](08_agent_feedback.md)).
 
 ### 6. Subscription Management (`colab pay`)
 

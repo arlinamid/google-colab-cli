@@ -11,9 +11,10 @@ Designed to support seamless developer productivity, headless automation, and AI
 > * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
 > * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit, and when set it interrupts the kernel after that many seconds without output.
 > * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
+> * **Feedback for AI agents:** `--json` results for `exec`, `run`, `usage` and `job` (failing line in your file, a diagnosis code and the commands to try next), background jobs with `colab job` and `colab run --detach`, `colab inspect` (variables, GPU, disk, packages), a compute-unit `--budget`, and `colab history` (recurring failures and what fixed them). See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
 > * **Updates:** `colab update` offers and installs this fork's releases; a newer Google release is only announced, so an update never replaces the fork with Google's package.
 >
-> Versions are numbered after the Google release they are based on: **0.7.5.N** is Google's 0.7.5 plus this fork's changes. Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's). See [CHANGELOG.md](CHANGELOG.md).
+> Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes. Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's). See [CHANGELOG.md](CHANGELOG.md).
 
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
@@ -98,7 +99,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only] [--json \| --json-stream]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
-| `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; Python jobs can report metrics with `colab_feedback.report()` |
+| `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] [--budget CU] [--json] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; Python jobs can report metrics with `colab_feedback.report()`; `--budget` stops the job once it has used about that many compute units |
 | `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
 | `colab inspect [-s NAME] [--vars] [--gpu] [--disk] [--packages] [--files PATH] [--json]` | Show the kernel's variables (types and shapes, never values), GPU, disk, memory and packages installed since the first inspect; a busy kernel is not queued behind |
 | `colab history errors\|stats [-s NAME] [--since 7d] [--json]` | Learn from earlier runs: recurring failures and what fixed them last time; runs, success rate, usual duration and cost per file (local history only) |
@@ -126,7 +127,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab clone [-s NAME] REPO [DEST] [--branch B] [--depth N] [--token SOURCE]` | Clone a git repository (GitHub `owner/name` or https URL) onto the runtime |
 | `colab keepalive [-s NAME] [--minutes N]` | Keep a runtime alive without running code (e.g. behind a detached share) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
-| `colab usage` | Show account compute-unit usage rate and balance |
+| `colab usage [--json]` | Show account compute-unit usage rate and balance (`--json`: balance, rate and hours left at that rate) |
 | `colab pay` | Open the Colab subscription page to manage compute units |
 | `colab version` | Print the installed version of the CLI |
 | `colab update [--install]` | Check for a newer release (and optionally upgrade the CLI in place) |
