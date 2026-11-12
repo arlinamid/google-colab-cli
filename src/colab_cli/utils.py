@@ -16,6 +16,7 @@ import base64
 import functools
 import html2text
 import logging
+import ntpath
 import os
 import re
 import subprocess
@@ -86,9 +87,10 @@ def _msys_root() -> Optional[str]:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         # git-bash.exe sets EXEPATH to the install root or its bin folder.
+        # Always a Windows path: ntpath splits it the same on every OS.
         exepath = os.environ.get("EXEPATH", "").rstrip("\\/")
-        if os.path.basename(exepath).lower() == "bin":
-            exepath = os.path.dirname(exepath)
+        if ntpath.basename(exepath).lower() == "bin":
+            exepath = ntpath.dirname(exepath)
         root = exepath
     return root.replace("\\", "/").rstrip("/") or None
 
