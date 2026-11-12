@@ -32,6 +32,12 @@ Now based on Google's Colab CLI 0.8.0.
 - **security:** access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies are no longer written to the debug log. Logs from older versions may contain credentials and can be deleted (upstream #196).
 - **download:** notebooks downloaded as JSON are valid JSON again (upstream #232).
 - **new, run, ssh:** unknown `--gpu`/`--tpu` values are rejected with the supported list instead of silently picking A100 or v6e1 (upstream #211).
+- **security:** when a file command fails (`upload`, `download`, `ls`, `rm`), the error no longer shows the runtime proxy token from the request URL.
+- **ssh, forward (Windows binary):** closing the terminal tab or force-killing the standalone `colab.exe` also ends ssh.exe and its proxy. Before, they kept running in the background.
+- **ssh, forward:** without an SSH key, `colab ssh` and `colab forward` exit 2 with a clear message before creating a runtime, instead of ssh's exit 255 after one was created. The message names other ed25519/ECDSA keys found in `~/.ssh` and how to pass one with `-i`.
+- **edit:** a failing editor gives a one-line error (exit 1) instead of a traceback.
+- **files (Git Bash on Windows):** `colab ls /content` and the other file commands work from Git Bash, which rewrote the remote path to `C:/Program Files/Git/content`.
+- **version:** a local install (`uv run colab version`) and binaries built from it report the current commit's version, not the one from when the environment was created.
 
 ## [0.7.5.2] - 2026-11-03
 

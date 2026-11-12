@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-12: `colab ssh` (interactive, `-- CMD`, `-N`) and `colab forward` check that a key file exists before they create a runtime or start ssh (`_require_ssh_key`), and exit 2. Before, the ProxyCommand child found the key missing, so the user got ssh's exit 255 after an interactive `colab ssh` had already assigned a runtime. Without a default key, the message names other ed25519/ECDSA keys in `~/.ssh` and how to pass one with `-i`. Added `tests/test_ssh_key_precheck.py`.
+2026-11-12: Standalone binary on Windows: the PyInstaller onefile launcher is the parent of the process that runs the CLI, from the same exe. That process now hands the only kill-on-close job handle to the launcher (`_hand_job_to_launcher`, `DuplicateHandle`), so a forced kill of the launcher (closed tab, `taskkill /F`) also ends the CLI process, ssh.exe and the proxy. Before, only the launcher died and they kept running. Verified with the venv python.exe launcher: after `taskkill /F` on it, neither its child nor the child's process was left.
 2026-11-03: No leftovers: on Windows `colab ssh`/`colab forward` put their process in a KILL_ON_JOB_CLOSE job object before starting ssh, so a killed colab (closed terminal tab) also ends ssh.exe and the proxy (verified live: 0 ssh.exe after closing the tab). The proxy's WebSocket connect is bounded to 30 s, then the socket timeout is lifted.
 2026-11-03: On Windows `colab ssh`/`colab forward` run Windows OpenSSH (%SystemRoot%\System32\OpenSSH) even when Git Bash puts MSYS ssh first on PATH (MSYS ssh ran the ProxyCommand through /bin/bash and lost the backslashes). A passphrase prompt without a terminal exits 2 instead of hanging: the parent tells the ProxyCommand child via COLAB_CLI_SSH_CAN_PROMPT, and ssh gets BatchMode=yes. Live: a ComfyUI forward on a T4 runtime from Git Bash returned HTTP 200.
 2026-11-03: Added port forwarding: `colab ssh -L SPEC` (repeatable; shell, `-- CMD` and `-N/--no-shell`) and `colab forward -s S PORT...`, with `ExitOnForwardFailure=yes`. While a forward is open the CLI pings the TFE keep-alive endpoint every 60s from its own process (no daemon); `--no-keep-alive` turns it off. See docs/07_secrets_tunnels_integrations.md.
@@ -161,10 +163,16 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
    | 502 | Runtime `sshd` unreachable — runtime may be unhealthy |
    | other / none | Raw status or a network-check hint |
 
-7. **Remote command**: `-- CMD` resolves an existing session and runs CMD as
+7. **Key check**: every mode that starts ssh itself (not `--proxy-mode`)
+   first checks that a key file exists: `-i PATH` (either half of the pair)
+   or a default `~/.ssh/id_ed25519.pub` / `id_ecdsa.pub`. Otherwise it exits 2
+   before resolving or creating a session, naming other ed25519/ECDSA keys
+   found in `~/.ssh`. Reading the key (and a passphrase prompt) stays in the
+   ProxyCommand child.
+8. **Remote command**: `-- CMD` resolves an existing session and runs CMD as
    described under Remote command. Its ProxyCommand child (mode `cmd`) only
    resolves the session too, so neither process creates a runtime.
-8. **Port forwarding**: each `-L` spec is validated (ports 1-65535, exit 2
+9. **Port forwarding**: each `-L` spec is validated (ports 1-65535, exit 2
    otherwise) and becomes `-L LOCAL:HOST:REMOTE` plus
    `-o ExitOnForwardFailure=yes`. With forwards and keep-alive on, ssh runs
    under `Popen` and `keepalive.wait_with_keep_alive` pings between
