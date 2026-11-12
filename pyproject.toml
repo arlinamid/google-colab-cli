@@ -75,6 +75,10 @@ core-metadata-version = "2.4"
 
 [tool.uv]
 package = true
+# The version comes from git (hatch-vcs): rebuild the editable install's
+# metadata on every commit and tag, or `colab version` (and a binary built
+# from this environment) keeps reporting an old version.
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
