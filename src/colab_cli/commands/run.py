@@ -32,6 +32,9 @@ See docs/05_run_command.md for the full design.
 
 import datetime
 import os
+import sys
+import tempfile
+import time
 import uuid
 from typing import List, Optional
 
@@ -58,7 +61,14 @@ from colab_cli.commands.session import (
     resolve_runtime_options,
 )
 from colab_cli.secrets import resolve_secrets
-from colab_cli.runtime import ColabRuntime
+from colab_cli.results import (
+    Block,
+    JsonEmitter,
+    build_cell_record,
+    build_summary,
+    failure_record,
+)
+from colab_cli.runtime import ColabRuntime, SessionConnectionLost
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
 
@@ -295,6 +305,28 @@ def run_command(
         Optional[List[str]],
         typer.Option("--secret", help=SECRET_HELP),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            envvar="COLAB_CLI_JSON",
+            help=(
+                "For scripts and AI agents: print a JSON record for the "
+                "script (output, error with its file line, diagnosis and "
+                "next steps) and a summary; the script's output goes into "
+                "the record. Put it before the script path. The exit code "
+                "stays the script's; 3 lost session, 4 timeout. Also set by "
+                "COLAB_CLI_JSON=1."
+            ),
+        ),
+    ] = False,
+    output_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output-dir",
+            help="With --json: where to save images (default: a new temp folder).",
+        ),
+    ] = None,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -407,6 +439,18 @@ def run_command(
     # ----- Execute the script -------------------------------------------------
     exit_code = 0
     cleanup_reason = "run_completed"
+    emitter = JsonEmitter(sys.stdout) if json_output else None
+    records = []
+    started = time.monotonic()
+    # Next steps can name the session only if it still exists afterwards.
+    live_session = name if keep else None
+    image_dir_used = None
+
+    def image_dir():
+        nonlocal image_dir_used
+        if image_dir_used is None:
+            image_dir_used = output_dir or tempfile.mkdtemp(prefix="colab-out-")
+        return image_dir_used
 
     def on_started(kid):
         s.kernel_id = kid
@@ -440,6 +484,18 @@ def run_command(
                     err=True,
                 )
                 state.prune_session(name)
+                if emitter:
+                    records.append(failure_record(
+                        "session_lost", str(e), index=0, cell_id=None,
+                        block=Block(label=script, file=script), session=None,
+                        duration_s=0,
+                    ))
+                    emitter.emit(records[-1])
+                    emitter.emit(build_summary(
+                        records, duration_s=time.monotonic() - started,
+                        session=name, exit_code=3, output_dir=None,
+                    ))
+                    raise typer.Exit(3)
                 raise typer.Exit(1)
             raise
 
@@ -452,10 +508,28 @@ def run_command(
         )
         state.store.add(s)
 
+        source = _script_block(script, payload)
+        run_started = time.monotonic()
         try:
             outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
+                payload,
+                # With --json the script's output goes into the record only.
+                output_hook=(lambda o: None) if emitter else _make_run_output_hook(),
+                timeout=timeout,
             )
+        except (TimeoutError, SessionConnectionLost) as e:
+            exit_code = 1
+            cleanup_reason = "run_failed"
+            if not emitter:
+                raise
+            kind = "idle_timeout" if isinstance(e, TimeoutError) else "session_lost"
+            exit_code = 4 if kind == "idle_timeout" else 3
+            records.append(failure_record(
+                kind, str(e) or kind, index=0, cell_id=None, block=source,
+                session=live_session, duration_s=time.monotonic() - run_started,
+                timeout=timeout,
+            ))
+            emitter.emit(records[-1])
         except Exception:
             # Genuine transport-level failure. Cleanup still happens via the
             # outer finally; surface non-zero exit so callers/CI notice.
@@ -466,11 +540,18 @@ def run_command(
             exit_code = _exit_code_from_outputs(outputs)
             if exit_code != 0:
                 cleanup_reason = "run_failed"
-            state.history.log_event(
-                name,
-                "execution",
-                {"code": payload, "outputs": outputs, "via": "run"},
-            )
+            event = {"code": payload, "outputs": outputs, "via": "run"}
+            if emitter:
+                records.append(build_cell_record(
+                    outputs, index=0, cell_id=None, block=source,
+                    duration_s=time.monotonic() - run_started,
+                    session=live_session, image_dir=image_dir,
+                    exit_code=exit_code,
+                ))
+                emitter.emit(records[-1])
+                diagnosis = records[-1]["diagnosis"]
+                event["diagnosis"] = diagnosis["code"] if diagnosis else None
+            state.history.log_event(name, "execution", event)
     finally:
         s.running = None
         state.store.update_if_present(s)
@@ -483,8 +564,26 @@ def run_command(
         if not keep:
             _teardown(name, s, reason=cleanup_reason)
 
+    if emitter:
+        emitter.emit(build_summary(
+            records, duration_s=time.monotonic() - started, session=name,
+            exit_code=exit_code, output_dir=image_dir_used,
+        ))
     if exit_code != 0:
         raise typer.Exit(exit_code)
+
+
+def _script_block(script: str, payload: str) -> Block:
+    """Where the script's lines are inside the payload sent to the kernel."""
+    body = read_script(script)
+    stripped = _strip_shebang(body)
+    return Block(
+        label=script,
+        file=script,
+        code=stripped,
+        prelude_lines=payload[: len(payload) - len(stripped)].count("\n"),
+        first_line=1 + body[: len(body) - len(stripped)].count("\n"),
+    )
 
 
 def _teardown(name: str, s: SessionState, *, reason: str) -> None:
