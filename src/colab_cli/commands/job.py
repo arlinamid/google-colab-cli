@@ -47,6 +47,7 @@ from colab_cli.keepalive import _Pinger
 from colab_cli.results import JsonEmitter
 from colab_cli.runtime import ColabRuntime
 from colab_cli.secrets import resolve_secrets
+from colab_cli.utils import undo_msys_args
 
 job_app = typer.Typer(
     help=(
@@ -210,6 +211,7 @@ def start(
     Python job, `from colab_feedback import report, note` records metrics and
     notes that `colab job status` shows.
     """
+    cmd = undo_msys_args(cmd) if cmd else cmd  # remote paths (Git Bash)
     if not file and not cmd:
         typer.echo("[colab] Give a script with -f FILE, or a command after --.", err=True)
         raise typer.Exit(2)
@@ -221,6 +223,14 @@ def start(
     env_vars = _parse_env_vars(env)
     state, session_name, s = _session(session)
     env_vars.update(resolve_secrets(secret, state.history))
+    launch_job(
+        state, session_name, s, file=file, source=source, argv=argv,
+        env_vars=env_vars, name=name, budget=budget, json_output=json_output,
+    )
+
+
+def launch_job(state, session_name, s, *, file, source, argv, env_vars, name, budget, json_output):
+    """Start the job on session ``s`` and report it; used by `colab run --detach` too."""
     label = name or (os.path.splitext(os.path.basename(file))[0] if file else os.path.basename(argv[0]))
     job_id = new_job_id(label)
     max_seconds = None

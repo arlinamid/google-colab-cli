@@ -209,3 +209,42 @@ def test_run_budget_stops_with_exit_5_and_tears_down(runtime, tmp_path, mock_com
     assert cell["diagnosis"]["code"] == "budget_reached"
     assert summary["exit_code"] == 5
     mock_common_state.client.unassign.assert_called_once()
+
+
+@pytest.fixture
+def job_kernel(mocker):
+    rt = mocker.patch("colab_cli.commands.job.ColabRuntime").return_value
+
+    def execute(code, **kw):
+        jid = code.split("'/content/.colab-jobs/")[1].split("'")[0]
+        return [{"output_type": "stream", "name": "stdout",
+                 "text": "COLAB_JOB " + json.dumps({"id": jid, "pid": 5, "dir": "d"}) + "\n"}]
+
+    rt.execute_code.side_effect = execute
+    return rt
+
+
+def test_detach_starts_a_job_and_keeps_the_runtime(runtime, job_kernel, tmp_path, mock_common_state):
+    script = tmp_path / "train.py"
+    script.write_text("print('x')\n")
+
+    result = runner.invoke(app, ["run", "--detach", "-s", "bg", str(script), "--epochs", "3"])
+
+    assert result.exit_code == 0, result.output
+    code = job_kernel.execute_code.call_args.args[0]
+    assert "'--epochs', '3'" in code
+    # The script did not run in the kernel, and the runtime stays up.
+    runtime.execute_code.assert_not_called()
+    mock_common_state.client.unassign.assert_not_called()
+    assert "colab job status -s bg train-" in result.output
+    assert "colab stop -s bg" in result.output
+
+
+def test_detach_json(runtime, job_kernel, tmp_path):
+    script = tmp_path / "train.py"
+    script.write_text("print('x')\n")
+
+    result = runner.invoke(app, ["run", "--detach", "--json", "-s", "bg", str(script)])
+
+    rec = json.loads(result.stdout)
+    assert rec["type"] == "job" and rec["session"] == "bg" and rec["state"] == "starting"

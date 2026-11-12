@@ -122,6 +122,23 @@ def undo_msys_path(path: str) -> str:
     return path
 
 
+def undo_msys_arg(arg: str) -> str:
+    """undo_msys_path for one argument, also after ``--opt=`` / ``KEY=``.
+
+    Git Bash converts the value of ``--out=/content/x`` too.
+    """
+    converted = undo_msys_path(arg)
+    if converted != arg or "=" not in arg:
+        return converted
+    head, _, value = arg.partition("=")
+    return f"{head}={undo_msys_path(value)}" if value else arg
+
+
+def undo_msys_args(args):
+    """undo_msys_arg for every argument (remote commands, script arguments)."""
+    return [undo_msys_arg(a) for a in args or []]
+
+
 def get_status_code(e: Exception) -> Optional[int]:
     """Safely extracts status code from various exception types."""
     if hasattr(e, "response") and e.response is not None:

@@ -73,7 +73,7 @@ from colab_cli.results import (
 from colab_cli.cost import CostMeter
 from colab_cli.runtime import ColabRuntime, RunLimitExceeded, SessionConnectionLost
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code, is_terminal_error
+from colab_cli.utils import get_status_code, is_terminal_error, undo_msys_args
 
 
 def _build_script_payload(
@@ -284,6 +284,17 @@ def run_command(
             ),
         ),
     ] = False,
+    detach: Annotated[
+        bool,
+        typer.Option(
+            "--detach",
+            help=(
+                "Start the script as a background job (`colab job`) on the new "
+                "runtime and return at once; the runtime keeps running until "
+                "you `colab stop` it. --budget then stops the job on the runtime."
+            ),
+        ),
+    ] = False,
     timeout: Annotated[
         Optional[float],
         typer.Option(
@@ -353,7 +364,8 @@ def run_command(
     """
     from colab_cli.common import state
 
-    script_args = script_args or []
+    # The script runs on the runtime: its path arguments are remote paths.
+    script_args = undo_msys_args(script_args or [])
     script_args, inline_env = _extract_env_args_from_script_args(script_args)
     env_vars = _parse_env_vars([*(env or []), *inline_env])
     env_vars.update(resolve_secrets(secret, state.history))
@@ -448,6 +460,22 @@ def run_command(
             "via": "run",
         },
     )
+    if detach:
+        from colab_cli.commands.job import launch_job
+        from colab_cli.jobs import job_argv
+
+        typer.echo(f"[colab] Session READY ({name}). Starting {script} as a job...", err=True)
+        launch_job(
+            state, name, s, file=script, source=read_script(script),
+            argv=job_argv(script, None, script_args), env_vars=env_vars,
+            name=None, budget=budget, json_output=json_output,
+        )
+        typer.echo(
+            f"[colab] The runtime keeps running after the job; stop it with "
+            f"`colab stop -s {name}`.",
+            err=json_output,
+        )
+        return
     typer.echo(f"[colab] Session READY ({name}). Executing {script}...", err=True)
 
     # ----- Execute the script -------------------------------------------------
