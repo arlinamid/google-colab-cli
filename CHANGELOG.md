@@ -12,11 +12,17 @@ below corresponds to a tag of the same name.
 
 ### Added
 
+- **run:** `colab run --detach` creates the runtime, starts the script as a background job and returns at once; the runtime is kept until `colab stop`.
 - **history:** the CLI learns from earlier runs. A failure that happened before says so in its `--json` record (`diagnosis.seen_before`), with what fixed it last time (packages installed, files uploaded, a code change). `colab history errors` lists recurring failures with their fixes; `colab history stats [FILE]` shows runs, success rate and the usual duration and cost of each file. History is read locally only; older history entries are used too.
 - **inspect:** `colab inspect -s NAME [--vars] [--gpu] [--disk] [--packages] [--files PATH] [--json]` shows the kernel's variables by type and shape (never their values), GPU memory, disk, memory, and the packages installed since the first inspect. A busy kernel is reported instead of waited for.
 - **cost:** `--json` results and `colab job status --json` estimate the compute units used, from the account's hourly rate. `--budget CU` on `exec`, `run` and `job start` stops the run when the estimate reaches the budget (exit 5; a job is stopped on the runtime itself). `colab usage --json`.
 - **job:** `colab job start -s NAME -f train.py` (or `-- CMD`) runs long work in the background on the runtime and returns at once; `colab exec` stays usable meanwhile and the job keeps running without a connected client. `colab job status|tail|wait|stop|list` show its state, tqdm progress, the metrics a Python job reports with `from colab_feedback import report`, the last output, a stall flag and, for a failed job, a diagnosis with next steps. `wait` keeps the runtime alive and exits with the job's own code.
 - **exec, run:** `--json` for scripts and AI agents: one JSON record per cell and a summary on stdout, other output on stderr. A failed cell's record gives the failing line in your local file or notebook cell, a diagnosis code (`missing_module`, `cuda_oom`, `no_gpu`, `disk_full`, `file_not_found`, `syntax_error`, `idle_timeout`, `session_lost`, ...) and the `colab` commands to try next. Exit codes: 1 code error, 3 lost session, 4 timeout; `run` keeps the script's own exit code. `COLAB_CLI_JSON=1` turns it on everywhere; `colab exec --json-stream` also streams output as it arrives; `--output-dir` sets where images are saved.
+
+### Fixed
+
+- **ssh, job, run (Git Bash on Windows):** remote paths in `colab ssh -- CMD`, `colab job start -- CMD` and `colab run` script arguments are no longer rewritten to `C:/Program Files/Git/...`.
+- **ssh (Linux):** killing `colab` (even with SIGKILL), or the launcher of the standalone binary, also ends ssh and its proxy.
 
 ## [0.8.0.1] - 2026-11-12
 

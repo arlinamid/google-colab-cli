@@ -68,6 +68,7 @@ Prefer `--json` whenever you parse the result; set `COLAB_CLI_JSON=1` once to tu
 
 ### Ephemeral one-shot jobs (`colab run`)
 - `colab run [--gpu T4] [--tpu v6e1] [--keep] [-s NAME] script.py [args...]` = `new` + `exec` + `stop` in one command. It provisions a fresh VM, runs the script with `sys.argv` and `__name__ == "__main__"` set like native `python script.py args`, then tears the VM down (unless `--keep`).
+- **Long runs**: `colab run --detach [--gpu T4] [--budget CU] -s NAME script.py [args]` creates the runtime, starts the script as a background job (see `colab job`) and returns at once with the job id; follow it with `colab job status|wait -s NAME`, then `colab stop -s NAME` (the runtime is kept).
 - **Exit codes propagate**: an uncaught exception or `sys.exit(N)` in the script makes `colab run` exit non-zero (CPython semantics: `sys.exit()`/`sys.exit(0)` → 0, `sys.exit(N)` → N, `sys.exit("msg")` → 1).
 - **Stream separation**: `colab run` writes its own `[colab] ...` chatter to **stderr** and the script's output to **stdout** — so `colab run job.py > out.txt` captures only the script's stdout. (`colab exec` streams the script's stdout/stderr live to your stdout/stderr.)
 - Works as a shebang: `#!/usr/bin/env -S colab run --gpu T4` makes a `chmod +x`'d `.py` a self-contained "rent a GPU, run, clean up" script. After editing CLI behavior, reinstall before testing shebangs — they resolve `colab` via `$PATH`, not the editable install.
