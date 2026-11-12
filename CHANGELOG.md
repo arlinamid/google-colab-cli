@@ -10,7 +10,9 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
-Now based on Google's Colab CLI 0.8.0.
+## [0.8.0.1] - 2026-11-12
+
+Now based on Google's Colab CLI 0.8.0. The version is Google's base version plus a fork release number, so Google's next release (0.8.1) still sorts above it.
 
 ### Changed
 
@@ -162,6 +164,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.1
 [0.7.5.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.2
 [0.7.5.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.1
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
