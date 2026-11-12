@@ -10,6 +10,10 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0.2] - 2026-11-12
+
+The agent feedback loop: results, background jobs, inspection, cost and history for scripts and AI agents (docs/08_agent_feedback.md). Still based on Google's Colab CLI 0.8.0, and includes everything from 0.8.0.1, whose release had no binaries attached.
+
 ### Added
 
 - **run:** `colab run --detach` creates the runtime, starts the script as a background job and returns at once; the runtime is kept until `colab stop`.
@@ -178,6 +182,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.2
 [0.8.0.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.1
 [0.7.5.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.2
 [0.7.5.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.1
