@@ -873,3 +873,28 @@ def test_main_explains_a_timeout(mocker, capsys):
     err = capsys.readouterr().err
     assert "[colab] Execution exceeded the 30 s timeout" in err
     assert "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "argv, method",
+    [
+        (["ls", "-s", "s1", "/content"], "list_dir"),
+        (["rm", "-s", "s1", "/content/x"], "rm"),
+        (["download", "-s", "s1", "/content/x", "x"], "download"),
+    ],
+)
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_file_errors_redact_tokens(
+    mock_contents_class, mock_store, mock_common_state, argv, method
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    getattr(mock_contents_class.return_value, method).side_effect = RuntimeError(
+        "boom url: https://h/api?colab-runtime-proxy-token=LEAKED-TOKEN"
+    )
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+    assert "LEAKED-TOKEN" not in result.output

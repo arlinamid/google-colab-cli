@@ -217,13 +217,20 @@ _SECRET_RE = re.compile(
 )
 
 
+def redact_secrets(text: str) -> str:
+    """Mask tokens, auth headers and cookies in ``text``.
+
+    Use it on any error text shown to the user that may carry a request URL
+    or headers, such as a requests ``HTTPError``.
+    """
+    return _SECRET_RE.sub(lambda m: m.group(m.lastindex) + "REDACTED", text)
+
+
 class _RedactingFormatter(logging.Formatter):
     """Formatter that masks tokens, auth headers and cookies in its output."""
 
     def format(self, record: logging.LogRecord) -> str:
-        return _SECRET_RE.sub(
-            lambda m: m.group(m.lastindex) + "REDACTED", super().format(record)
-        )
+        return redact_secrets(super().format(record))
 
 
 def setup_logging(log_to_stderr: bool):

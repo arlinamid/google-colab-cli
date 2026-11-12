@@ -187,3 +187,33 @@ def test_upload_file(mock_request, client, tmp_path):
             "chunk": 1,
         },
     )
+
+
+def _http_error_response(status, reason):
+    from requests import Response as RealResponse
+
+    resp = RealResponse()
+    resp.status_code = status
+    resp.reason = reason
+    resp.url = (
+        "https://fake-endpoint.colab.dev/api/contents/up.txt"
+        "?authuser=0&colab-runtime-proxy-token=SECRET-PROXY-TOKEN"
+    )
+    return resp
+
+
+@patch("colab_cli.contents.requests.request")
+def test_http_error_message_hides_the_proxy_token(mock_request, client):
+    """requests puts the full URL, query string included, in HTTPError. The
+    runtime proxy token is a query parameter, so it must not reach the
+    message that `colab upload` and friends print."""
+    mock_request.return_value = _http_error_response(500, "Internal Server Error")
+
+    with pytest.raises(Exception) as excinfo:
+
+        client.list_dir("up.txt")
+
+    message = str(excinfo.value)
+    assert "SECRET-PROXY-TOKEN" not in message
+    assert "500" in message
+    assert "up.txt" in message

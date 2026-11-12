@@ -22,6 +22,7 @@ import typer
 from typing import Optional
 from typing_extensions import Annotated
 
+from colab_cli.common import redact_secrets
 from colab_cli.contents import ContentsClient
 from colab_cli.terminal import is_windows, split_windows_command_line
 
@@ -51,7 +52,7 @@ def ls(
         else:
             typer.echo(data.get("name"))
     except Exception as e:
-        typer.echo(f"[colab] Error: {e}")
+        typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -72,7 +73,7 @@ def rm(
         state.history.log_event(name, "file_operation", {"op": "rm", "path": path})
         typer.echo(f"[colab] Deleted {path}")
     except Exception as e:
-        typer.echo(f"[colab] Error: {e}")
+        typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -101,7 +102,7 @@ def upload(
         )
         typer.echo(f"[colab] Uploaded '{local_path}' to '{remote_path}'")
     except Exception as e:
-        typer.echo(f"[colab] Upload failed: {e}")
+        typer.echo(f"[colab] Upload failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -131,7 +132,7 @@ def download(
         )
         typer.echo(f"[colab] Downloaded '{remote_path}' to '{local_path}'")
     except Exception as e:
-        typer.echo(f"[colab] Download failed: {e}")
+        typer.echo(f"[colab] Download failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 

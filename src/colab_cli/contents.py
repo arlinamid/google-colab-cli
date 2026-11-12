@@ -43,7 +43,16 @@ class ContentsClient:
         if get_status_code(response) == 404:
             raise FileNotFoundError(f"File or directory not found: {path}")
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            # requests names the full URL, and the runtime proxy token is a
+            # query parameter of it: report the status and path only.
+            raise requests.HTTPError(
+                f"{e.response.status_code} {e.response.reason} for "
+                f"/api/contents/{quoted_path}",
+                response=e.response,
+            ) from None
 
         # DELETE doesn't return JSON
         if method == "DELETE":
