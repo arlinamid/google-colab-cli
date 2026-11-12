@@ -30,7 +30,6 @@ from colab_cli.utils import (
     read_python_source,
     render_display_data,
 )
-from colab_cli.console import connect_console
 from colab_cli.secrets import resolve_secrets
 from colab_cli.notebook import (
     TITLE_REGEX,  # noqa: F401  (re-exported; it used to live here)
@@ -51,7 +50,6 @@ SECRET_HELP = (
     "NAME variable, default), env:VAR, prompt, hf-cli or gh-cli. The value "
     "is written as *** in the history log. Repeat for multiple secrets."
 )
-
 
 def is_stdin_tty() -> bool:
     """True if stdin is a terminal."""
@@ -263,8 +261,8 @@ def exec_command(
         typer.Option(
             "--timeout",
             help=(
-                "Interrupt the kernel and fail if the code runs longer than this "
-                "many seconds. Default: no limit."
+                "Fail and interrupt the kernel after this many seconds without "
+                "output. Default: no limit."
             ),
         ),
     ] = None,
@@ -546,35 +544,6 @@ def repl(
             state.store.update_if_present(s)
 
 
-def console(
-    session: Annotated[
-        Optional[str], typer.Option("-s", "--session", help="Session name")
-    ] = None,
-):
-    """Connect to raw TTY console"""
-    from colab_cli.common import state
-
-    name = state.resolve_session(session)
-    s = state.get_session(name)
-    state.history.log_event(s.name, "console_started", {})
-    s.running = "console"
-    state.store.add(s)
-    try:
-        connect_console(s)
-    except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
-    finally:
-        s.running = None
-        state.store.update_if_present(s)
-
-
 def register(app: typer.Typer):
     app.command(name="exec")(exec_command)
     app.command()(repl)
-    app.command()(console)

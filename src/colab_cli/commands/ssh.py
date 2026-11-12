@@ -31,9 +31,10 @@ connect), ``--gpu/--tpu`` pick the accelerator for that auto-created runtime,
 and ``--rm`` stops the runtime when you disconnect.
 
 ``--identity/-i`` overrides the default key order (``~/.ssh/id_ed25519`` ->
-``id_ecdsa``); the public key is derived via ``ssh-keygen -y -f`` and sent in
-the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
-``id_rsa`` is not auto-selected.
+``id_ecdsa``); it accepts either a public key (``.pub``) or a private key path,
+reading the ``.pub`` file directly when present and falling back to
+``ssh-keygen -y -f`` to populate the ``X-Colab-Ssh-Pubkey`` header. RSA keys are
+rejected by the server, so ``id_rsa`` is not auto-selected.
 """
 
 import contextlib
@@ -77,6 +78,8 @@ _CONNECT_TIMEOUT_SEC = 30
 # Handle of the kill-on-close job this process is in (Windows); kept open for
 # the life of the process. See _kill_children_with_this_process.
 _JOB_HANDLE = None
+# _JOB_HANDLE when the standalone binary's launcher holds the job handle.
+_JOB_HELD_BY_LAUNCHER = "launcher"
 
 # Set by the colab process that starts ssh, for its ProxyCommand child:
 # whether a person can answer a passphrase prompt. The child's stdin is the ssh
@@ -153,6 +156,7 @@ def _kill_children_with_this_process() -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateJobObjectW.restype = wintypes.HANDLE
         kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.restype = wintypes.HANDLE
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
             return
@@ -168,10 +172,81 @@ def _kill_children_with_this_process() -> None:
             wintypes.HANDLE(job), wintypes.HANDLE(kernel32.GetCurrentProcess())
         ):
             _JOB_HANDLE = job
+            if _hand_job_to_launcher(kernel32, job):
+                _JOB_HANDLE = _JOB_HELD_BY_LAUNCHER
         else:
             kernel32.CloseHandle(wintypes.HANDLE(job))
     except Exception:  # Best effort: never block ssh over cleanup.
         pass
+
+
+def _process_image(kernel32, process) -> Optional[str]:
+    """Full exe path of an open process handle, or None (Windows)."""
+    import ctypes
+
+    size = ctypes.c_ulong(32768)
+    buf = ctypes.create_unicode_buffer(size.value)
+    if not kernel32.QueryFullProcessImageNameW(
+        ctypes.c_void_p(process), 0, buf, ctypes.byref(size)
+    ):
+        return None
+    return buf.value
+
+
+def _hand_job_to_launcher(kernel32, job) -> bool:
+    """Standalone binary: give the only handle of ``job`` to its launcher.
+
+    The PyInstaller onefile binary is a launcher process that runs this code
+    as its child, from the same exe. A forced kill of the launcher (a closed
+    terminal tab, ``taskkill /F``) does not end the child, so a job handle
+    held here stays open and ssh keeps running. Once the launcher holds the
+    only handle, the job closes when the launcher ends in any way, which
+    ends this process, ssh and its ProxyCommand. When the launcher exits
+    normally this process has already finished.
+
+    Returns:
+      True if the launcher now holds the handle and this process closed its
+      own; False (nothing changed) for a Python install, a parent that is
+      another program, or any failure.
+    """
+    import ctypes
+
+    if not getattr(sys, "frozen", False):
+        return False
+    process_dup_handle = 0x0040
+    process_query_limited_information = 0x1000
+    duplicate_same_access = 0x0002
+    parent = kernel32.OpenProcess(
+        process_dup_handle | process_query_limited_information,
+        False,
+        os.getppid(),
+    )
+    if not parent:
+        return False
+    try:
+        image = _process_image(kernel32, parent)
+        same_exe = image is not None and os.path.normcase(
+            os.path.abspath(image)
+        ) == os.path.normcase(os.path.abspath(sys.executable))
+        if not same_exe:
+            return False
+        copy = ctypes.c_void_p()
+        # Not DUPLICATE_CLOSE_SOURCE: it closes the source even on failure,
+        # and closing the last handle would kill this process.
+        if not kernel32.DuplicateHandle(
+            ctypes.c_void_p(kernel32.GetCurrentProcess()),
+            ctypes.c_void_p(job),
+            ctypes.c_void_p(parent),
+            ctypes.byref(copy),
+            0,
+            False,
+            duplicate_same_access,
+        ):
+            return False
+        kernel32.CloseHandle(ctypes.c_void_p(job))
+        return True
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(parent))
 
 
 def _can_prompt_for_passphrase() -> bool:
@@ -292,9 +367,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -302,11 +375,14 @@ def _pubkey_from_identity(identity: str) -> str:
 def _resolve_pubkey(identity: Optional[str]) -> str:
     """Returns the public key for the ``X-Colab-Ssh-Pubkey`` header.
 
-    With ``identity``, derives it from that private key; otherwise scans
-    ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference order.
+    With ``identity``, reads the matching ``.pub`` file directly if present
+    (whether ``identity`` was passed with or without ``.pub``), falling back to
+    deriving it from the private key via ``_pubkey_from_identity``; otherwise
+    scans ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference
+    order.
 
     Args:
-      identity: Path to a private key, or None to scan ``~/.ssh``.
+      identity: Path to a public or private key, or None to scan ``~/.ssh``.
 
     Returns:
       The public key text to send verbatim in the header.
@@ -315,18 +391,80 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
       typer.Exit: If no usable key is found (exit code 2).
     """
     if identity:
-        return _pubkey_from_identity(identity)
+        expanded = Path(os.path.expanduser(identity))
+        if expanded.suffix == ".pub":
+            pub_path = expanded
+            priv_path = expanded.with_suffix("")
+        else:
+            priv_path = expanded
+            pub_path = expanded.with_suffix(".pub")
+        if pub_path.exists():
+            if pubkey := pub_path.read_text().strip():
+                return pubkey
+        target = str(priv_path) if priv_path.exists() else identity
+        return _pubkey_from_identity(target)
 
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     for name in _KEY_TYPES:
         candidate = ssh_dir / name
         if candidate.exists():
             return candidate.read_text().strip()
-    typer.echo(
+    typer.echo(_no_key_message(ssh_dir), err=True)
+    raise typer.Exit(code=2)
+
+
+def _ssh_dir() -> Path:
+    return Path(os.path.expanduser("~/.ssh"))
+
+
+def _no_key_message(ssh_dir: Path) -> str:
+    """Says no default key exists, naming other usable keys in ``ssh_dir``."""
+    message = (
         "[colab] no SSH public key found in ~/.ssh/. Run "
-        "`ssh-keygen -t ed25519` to generate one, or pass --identity.",
-        err=True,
+        "`ssh-keygen -t ed25519` to generate one, or pass --identity."
     )
+    others = []
+    with contextlib.suppress(OSError):
+        for pub in sorted(ssh_dir.glob("*.pub")):
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                # The server takes ed25519 and ECDSA keys, not RSA.
+                if pub.read_text().startswith(("ssh-ed25519", "ecdsa-")):
+                    others.append(pub)
+    if others:
+        names = ", ".join(f"~/.ssh/{p.name}" for p in others)
+        message += (
+            f" Found {names}: pass it with -i, for example "
+            f"`-i ~/.ssh/{others[0].stem}`."
+        )
+    return message
+
+
+def _require_ssh_key(identity: Optional[str]) -> None:
+    """Exits 2 when there is no key to send, before any runtime or ssh starts.
+
+    The ProxyCommand child reads the key (see _resolve_pubkey), so without
+    this check a missing key ended as ssh's exit 255, after an interactive
+    ``colab ssh`` had already created a runtime. Only checks that a file
+    exists; reading it, and any passphrase prompt, stay in the child.
+
+    Raises:
+      typer.Exit: If ``identity`` names no existing key file, or, without
+        ``identity``, no default key exists (exit code 2).
+    """
+    if identity:
+        expanded = Path(os.path.expanduser(identity))
+        if expanded.suffix == ".pub":
+            pair = (expanded, expanded.with_suffix(""))
+        else:
+            pair = (expanded, expanded.with_suffix(".pub"))
+        if any(p.exists() for p in pair):
+            return
+        typer.echo(f"[colab] SSH key not found: {identity}", err=True)
+        raise typer.Exit(code=2)
+    ssh_dir = _ssh_dir()
+    if any((ssh_dir / name).exists() for name in _KEY_TYPES):
+        return
+    typer.echo(_no_key_message(ssh_dir), err=True)
     raise typer.Exit(code=2)
 
 
@@ -715,7 +853,12 @@ def _ssh_base_args(
         "LogLevel=ERROR",
     ]
     if identity:
-        args.extend(["-i", os.path.expanduser(identity)])
+        ssh_identity = os.path.expanduser(identity)
+        if ssh_identity.endswith(".pub"):
+            priv_path = ssh_identity.removesuffix(".pub")
+            if os.path.exists(priv_path):
+                ssh_identity = priv_path
+        args.extend(["-i", ssh_identity])
     if forwards:
         args.extend(["-o", "ExitOnForwardFailure=yes"])
         for fwd in forwards:
@@ -855,9 +998,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -1020,9 +1161,9 @@ def ssh(
             "--identity",
             "-i",
             help=(
-                "SSH private key whose public key is sent in the "
-                "X-Colab-Ssh-Pubkey header (default: first of "
-                "~/.ssh/id_ed25519, id_ecdsa)."
+                "SSH key (public `.pub` or private key path) whose public key "
+                "is sent in the X-Colab-Ssh-Pubkey header (default: first of "
+                "~/.ssh/id_ed25519.pub, id_ecdsa.pub)."
             ),
         ),
     ] = None,
@@ -1132,6 +1273,8 @@ def ssh(
             "~/.ssh/config instead.",
             err=True,
         )
+    if not proxy_mode:
+        _require_ssh_key(identity)
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
@@ -1189,6 +1332,7 @@ def forward(
     Only your machine can reach it. The runtime is kept alive meanwhile.
     """
     forwards = [_parse_forward(p) for p in ports]
+    _require_ssh_key(identity)
     s = _resolve_session(session)
     raise typer.Exit(
         code=_run_forward_only(s, identity, forwards, not no_keep_alive)

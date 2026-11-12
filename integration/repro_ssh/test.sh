@@ -45,8 +45,12 @@ for needle in "--proxy-mode" "--identity" "--session" "--gpu" "--tpu" "--rm" \
 done
 
 echo "== A2: an unknown session exits 2 with an actionable message (offline) =="
-OFFLINE_CFG="$(mktemp -d)/sessions.json"
-A2_OUT="$(uv run colab --config "$OFFLINE_CFG" ssh -s ghost-no-such-session 2>&1)"
+OFFLINE_DIR="$(mktemp -d)"
+OFFLINE_CFG="$OFFLINE_DIR/sessions.json"
+# colab ssh checks for a key first; give it one so the session check runs.
+echo "ssh-ed25519 AAAAOFFLINE offline@test" > "$OFFLINE_DIR/k.pub"
+A2_OUT="$(uv run colab --config "$OFFLINE_CFG" ssh -s ghost-no-such-session \
+  -i "$OFFLINE_DIR/k.pub" 2>&1)"
 A2_RC=$?
 echo "$A2_OUT"
 if [ "$A2_RC" -ne 2 ]; then
@@ -110,6 +114,14 @@ trap cleanup EXIT
 
 # Throwaway ed25519 key (RSA is server-rejected) so we never touch ~/.ssh.
 ssh-keygen -t ed25519 -N "" -f "$KEY" >/dev/null
+# Windows OpenSSH (which `colab ssh` runs on Windows) ignores a key that
+# others can read ("bad permissions"); a temp folder's inherited ACL allows
+# that. Keep it to the current user only.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$KEY")" /inheritance:r /grant:r "$USERNAME:F" >/dev/null
+    ;;
+esac
 
 echo "[*] Creating runtime '$SESSION_NAME' (REAL API CALL)..."
 if ! uv run colab $AUTH_FLAGS --config "$SESSION_FILE" new -s "$SESSION_NAME"; then
@@ -164,6 +176,20 @@ if ! echo "$E2E_OUT" | grep -q "$MARKER"; then
   exit 1
 fi
 echo "[SUCCESS] Handshake + pubkey-auth + bridge + remote exec all work."
+
+echo "[*] End-to-end: colab ssh -i <key>.pub -- CMD (public key path)."
+PUB_MARKER="ssh-pub-ok-$$-$RANDOM"
+PUB_OUT=$(
+  timeout 120 uv run colab $AUTH_FLAGS --config "$SESSION_FILE" ssh \
+    -s "$SESSION_NAME" -i "$KEY.pub" -- "whoami; echo $PUB_MARKER" </dev/null 2>&1
+)
+PUB_RC=$?
+echo "$PUB_OUT"
+if [ "$PUB_RC" -ne 0 ] || ! echo "$PUB_OUT" | grep -q "$PUB_MARKER"; then
+  echo "[FAILURE] colab ssh -i <key>.pub -- CMD failed (rc=$PUB_RC)."
+  exit 1
+fi
+echo "[SUCCESS] --identity with .pub suffix works end-to-end."
 
 echo "[*] Negative: an RSA key is rejected by the server (non-interactive)."
 ssh-keygen -t rsa -b 2048 -N "" -f "$RSA_KEY" >/dev/null

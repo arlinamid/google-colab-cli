@@ -119,3 +119,73 @@ def test_proxy_child_follows_the_parent_flag(monkeypatch, mocker, flag, expected
     mocker.patch("colab_cli.secrets._can_prompt", return_value=not expected)
     monkeypatch.setenv(ssh_module._CAN_PROMPT_ENV, flag)
     assert ssh_module._can_prompt_for_passphrase() is expected
+
+
+# The standalone binary is a PyInstaller onefile: a launcher process that
+# starts this code as its child, from the same exe. Killing the launcher
+# (a closed terminal tab, `taskkill /F`) leaves the child running, so a job
+# handle held by the child never closes and ssh lives on. The child hands
+# the only job handle to the launcher instead.
+LAUNCHER_EXE = r"C:\tools\colab.exe"
+
+
+@pytest.fixture
+def kernel32():
+    k = MagicMock()
+    k.OpenProcess.return_value = 111
+    k.GetCurrentProcess.return_value = -1
+    k.DuplicateHandle.return_value = 1
+    return k
+
+
+@pytest.fixture
+def frozen_binary(mocker, monkeypatch):
+    monkeypatch.setattr(ssh_module.sys, "frozen", True, raising=False)
+    mocker.patch.object(ssh_module.sys, "executable", LAUNCHER_EXE)
+    mocker.patch.object(ssh_module.os, "getppid", return_value=4242)
+
+
+def test_binary_hands_the_job_to_its_launcher(kernel32, frozen_binary, mocker):
+    mocker.patch.object(ssh_module, "_process_image", return_value=LAUNCHER_EXE)
+
+    assert ssh_module._hand_job_to_launcher(kernel32, 222) is True
+
+    kernel32.OpenProcess.assert_called_once()
+    assert kernel32.OpenProcess.call_args.args[2] == 4242
+    kernel32.DuplicateHandle.assert_called_once()
+    # Only after the launcher holds a copy does this process drop its own.
+    closed = [c.args[0] for c in kernel32.CloseHandle.call_args_list]
+    assert any(getattr(h, "value", h) == 222 for h in closed)
+
+
+def test_binary_keeps_the_job_when_the_parent_is_another_program(
+    kernel32, frozen_binary, mocker
+):
+    """A binary started from a shell has no launcher of its own exe as parent
+    (e.g. onedir builds): handing the job to the shell would tie ssh to it."""
+    mocker.patch.object(
+        ssh_module, "_process_image", return_value=r"C:\Windows\System32\cmd.exe"
+    )
+
+    assert ssh_module._hand_job_to_launcher(kernel32, 222) is False
+    kernel32.DuplicateHandle.assert_not_called()
+    closed = [c.args[0] for c in kernel32.CloseHandle.call_args_list]
+    assert not any(getattr(h, "value", h) == 222 for h in closed)
+
+
+def test_binary_keeps_the_job_when_duplication_fails(
+    kernel32, frozen_binary, mocker
+):
+    mocker.patch.object(ssh_module, "_process_image", return_value=LAUNCHER_EXE)
+    kernel32.DuplicateHandle.return_value = 0
+
+    assert ssh_module._hand_job_to_launcher(kernel32, 222) is False
+    closed = [c.args[0] for c in kernel32.CloseHandle.call_args_list]
+    assert not any(getattr(h, "value", h) == 222 for h in closed)
+
+
+def test_python_install_keeps_the_job(kernel32, mocker, monkeypatch):
+    monkeypatch.delattr(ssh_module.sys, "frozen", raising=False)
+
+    assert ssh_module._hand_job_to_launcher(kernel32, 222) is False
+    kernel32.OpenProcess.assert_not_called()

@@ -22,8 +22,10 @@ import typer
 from typing import Optional
 from typing_extensions import Annotated
 
+from colab_cli.common import redact_secrets
 from colab_cli.contents import ContentsClient
 from colab_cli.terminal import is_windows, split_windows_command_line
+from colab_cli.utils import undo_msys_path
 
 
 def ls(
@@ -36,6 +38,7 @@ def ls(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    path = undo_msys_path(path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -51,7 +54,7 @@ def ls(
         else:
             typer.echo(data.get("name"))
     except Exception as e:
-        typer.echo(f"[colab] Error: {e}")
+        typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -65,6 +68,7 @@ def rm(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    path = undo_msys_path(path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -72,7 +76,7 @@ def rm(
         state.history.log_event(name, "file_operation", {"op": "rm", "path": path})
         typer.echo(f"[colab] Deleted {path}")
     except Exception as e:
-        typer.echo(f"[colab] Error: {e}")
+        typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -87,6 +91,7 @@ def upload(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
     if not os.path.isfile(local_path):
         typer.echo(f"[colab] Local file '{local_path}' not found.")
@@ -101,7 +106,7 @@ def upload(
         )
         typer.echo(f"[colab] Uploaded '{local_path}' to '{remote_path}'")
     except Exception as e:
-        typer.echo(f"[colab] Upload failed: {e}")
+        typer.echo(f"[colab] Upload failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -120,6 +125,7 @@ def download(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
@@ -131,7 +137,7 @@ def download(
         )
         typer.echo(f"[colab] Downloaded '{remote_path}' to '{local_path}'")
     except Exception as e:
-        typer.echo(f"[colab] Download failed: {e}")
+        typer.echo(f"[colab] Download failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
 
 
@@ -175,6 +181,7 @@ def edit(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
 
     contents = ContentsClient(s)
@@ -204,7 +211,13 @@ def edit(
 
         hash_before = get_file_hash(local_path)
 
-        _launch_editor(local_path)
+        try:
+            _launch_editor(local_path)
+        except click.ClickException as e:
+            # Typer vendors its own Click and does not handle exceptions of
+            # the click package (raised here and by click.edit).
+            typer.echo(f"[colab] {e.format_message()}", err=True)
+            raise typer.Exit(1)
 
         hash_after = get_file_hash(local_path)
 

@@ -1,8 +1,12 @@
 ---
 log:
+2026-11-12: `colab ssh` (interactive, `-- CMD`, `-N`) and `colab forward` check that a key file exists before they create a runtime or start ssh (`_require_ssh_key`), and exit 2. Before, the ProxyCommand child found the key missing, so the user got ssh's exit 255 after an interactive `colab ssh` had already assigned a runtime. Without a default key, the message names other ed25519/ECDSA keys in `~/.ssh` and how to pass one with `-i`. Added `tests/test_ssh_key_precheck.py`.
+2026-11-12: Standalone binary on Windows: the PyInstaller onefile launcher is the parent of the process that runs the CLI, from the same exe. That process now hands the only kill-on-close job handle to the launcher (`_hand_job_to_launcher`, `DuplicateHandle`), so a forced kill of the launcher (closed tab, `taskkill /F`) also ends the CLI process, ssh.exe and the proxy. Before, only the launcher died and they kept running. Verified with the venv python.exe launcher: after `taskkill /F` on it, neither its child nor the child's process was left.
 2026-11-03: No leftovers: on Windows `colab ssh`/`colab forward` put their process in a KILL_ON_JOB_CLOSE job object before starting ssh, so a killed colab (closed terminal tab) also ends ssh.exe and the proxy (verified live: 0 ssh.exe after closing the tab). The proxy's WebSocket connect is bounded to 30 s, then the socket timeout is lifted.
 2026-11-03: On Windows `colab ssh`/`colab forward` run Windows OpenSSH (%SystemRoot%\System32\OpenSSH) even when Git Bash puts MSYS ssh first on PATH (MSYS ssh ran the ProxyCommand through /bin/bash and lost the backslashes). A passphrase prompt without a terminal exits 2 instead of hanging: the parent tells the ProxyCommand child via COLAB_CLI_SSH_CAN_PROMPT, and ssh gets BatchMode=yes. Live: a ComfyUI forward on a T4 runtime from Git Bash returned HTTP 200.
 2026-11-03: Added port forwarding: `colab ssh -L SPEC` (repeatable; shell, `-- CMD` and `-N/--no-shell`) and `colab forward -s S PORT...`, with `ExitOnForwardFailure=yes`. While a forward is open the CLI pings the TFE keep-alive endpoint every 60s from its own process (no daemon); `--no-keep-alive` turns it off. See docs/07_secrets_tunnels_integrations.md.
+2026-11-09: `--identity/-i` now accepts either a `.pub` public key or a private key path: `_resolve_pubkey` reads the `.pub` file directly when present before falling back to `_pubkey_from_identity` (`ssh-keygen -y -f`), and `_ssh_base_args` strips `.pub` for `ssh -i` when the sibling private key exists on disk.
+2026-10-29: Removed the `colab console` subcommand, so `colab ssh` is the interactive shell on the runtime. Dropped console behavior from the Windows validation caveat.
 2026-10-29: Added `colab ssh [-s NAME] -- CMD`, which runs one command on an existing session and exits with its status (a PTY only when stdin and stdout are terminals; neither it nor its ProxyCommand child creates a runtime). Its handshake carries `ssh-mode-cmd`, and the update banner is skipped for `ssh` when stdout is not a terminal. Added `tests/test_ssh_cmd.py`.
 2026-10-29: HTTP 429 now shows the server's SSH session limit ("N of N SSH sessions in use") when the body carries one.
 2026-10-29: The ProxyCommand that `colab ssh` starts now keeps a non-default global `--auth` and `--config` (as an absolute path), so `colab --config ALT ssh -s S` bridges S from ALT instead of the default sessions file.
@@ -37,7 +41,7 @@ colab ssh [OPTIONS] [-- CMD [ARGS]...]
 |---|---|---|---|
 | `-s`, `--session` | str | auto | Session to connect to. If omitted, uses your only active session, auto-creates one when you have none (not with `-- CMD`), or errors when you have several. |
 | `--proxy-mode` | bool | False | Act as an OpenSSH `ProxyCommand`-compatible WebSocket↔stdio bridge (reads stdin, writes stdout) for `~/.ssh/config`. Every other flag still applies. |
-| `-i`, `--identity` | str | auto | Private key for the public key sent to Colab. Default: first of `~/.ssh/id_ed25519`, `id_ecdsa`. |
+| `-i`, `--identity` | str | auto | SSH key (`.pub` public key or private key path) for the public key sent to Colab. Default: first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`. |
 | `--gpu` | str | None | GPU accelerator for a runtime this command creates (T4, L4, G4, H100, A100). |
 | `--tpu` | str | None | TPU accelerator for a runtime this command creates (v5e1, v6e1). |
 | `--high-mem` | bool | False | Request high-RAM when this command auto-creates a runtime (ignored when connecting to an existing session). |
@@ -159,10 +163,16 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
    | 502 | Runtime `sshd` unreachable — runtime may be unhealthy |
    | other / none | Raw status or a network-check hint |
 
-7. **Remote command**: `-- CMD` resolves an existing session and runs CMD as
+7. **Key check**: every mode that starts ssh itself (not `--proxy-mode`)
+   first checks that a key file exists: `-i PATH` (either half of the pair)
+   or a default `~/.ssh/id_ed25519.pub` / `id_ecdsa.pub`. Otherwise it exits 2
+   before resolving or creating a session, naming other ed25519/ECDSA keys
+   found in `~/.ssh`. Reading the key (and a passphrase prompt) stays in the
+   ProxyCommand child.
+8. **Remote command**: `-- CMD` resolves an existing session and runs CMD as
    described under Remote command. Its ProxyCommand child (mode `cmd`) only
    resolves the session too, so neither process creates a runtime.
-8. **Port forwarding**: each `-L` spec is validated (ports 1-65535, exit 2
+9. **Port forwarding**: each `-L` spec is validated (ports 1-65535, exit 2
    otherwise) and becomes `-L LOCAL:HOST:REMOTE` plus
    `-o ExitOnForwardFailure=yes`. With forwards and keep-alive on, ssh runs
    under `Popen` and `keepalive.wait_with_keep_alive` pings between
@@ -174,8 +184,10 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
 
 ### Unit tests (`tests/test_ssh.py`)
 1. WebSocket URL construction (`wss` for https, `ws` for http; token query param).
-2. Pubkey resolution — `--identity` (via `ssh-keygen -y -f`) and the `~/.ssh`
-   default scan; missing-key and missing-identity exit paths.
+2. Pubkey resolution — `--identity` (reads the matching `.pub` file first,
+   whether passed with or without `.pub`, before falling back to `ssh-keygen -y
+   -f`) and the `~/.ssh` default scan; missing-key and missing-identity exit
+   paths.
 3. The full status→message map (400/401/403/404/429/502/other/none).
 4. Shell quoting for the `ProxyCommand` string.
 5. Session resolution (existing vs missing).
@@ -227,8 +239,8 @@ Portable tests also check registration without SIGHUP and the local null
 device. Existing POSIX shell quoting and teardown tests remain in the suite.
 
 These and the existing SSH tests passed on Windows, Linux, and macOS with
-Python 3.12. This covers SSH compatibility only; interactive console behavior,
-local file editing, and self-update require separate platform validation.
+Python 3.12. This covers SSH compatibility only; local file editing and
+self-update require separate platform validation.
 
 `uv run python integration/repro_windows_ssh/test.py` provides a native Windows
 live test using cached OAuth2 credentials. It creates a CPU runtime, executes a

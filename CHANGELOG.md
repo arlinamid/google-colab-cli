@@ -10,6 +10,37 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0.1] - 2026-11-12
+
+Now based on Google's Colab CLI 0.8.0. The version is Google's base version plus a fork release number, so Google's next release (0.8.1) still sorts above it.
+
+### Changed
+
+- **exec, run:** `--timeout` is now an idle limit: it fails only after that many seconds without output, so code that keeps printing is never cut off. The wait no longer polls the kernel library's busy loop (upstream #185). Unlike Google's CLI, the default is still no limit, and a timeout still interrupts the kernel so the code stops too.
+- **ssh:** `--identity/-i` accepts a public key (`.pub`) as well as a private key; the matching `.pub` file is read directly when present (upstream #225).
+- **auth:** `--auth=adc` no longer runs `gcloud config get-value project` on every command (upstream #218).
+
+### Added
+
+- **auth:** on Linux, a warning when the keyring collection is locked, so you know why the CLI is waiting on an unlock prompt (upstream #204).
+
+### Removed
+
+- **console:** **BREAKING:** `colab console` is removed, following Google's CLI (upstream #205). Use `colab ssh -s NAME` for an interactive shell and `colab ssh -s NAME -- CMD` for one command; where ssh can't work, pipe `!`-prefixed shell commands to `colab exec -s NAME`.
+
+### Fixed
+
+- **security:** the debug log, `sessions.json`, `settings.json` and session history files are created readable only by their owner, and older copies are tightened the next time the CLI uses them (upstream #196).
+- **security:** access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies are no longer written to the debug log. Logs from older versions may contain credentials and can be deleted (upstream #196).
+- **download:** notebooks downloaded as JSON are valid JSON again (upstream #232).
+- **new, run, ssh:** unknown `--gpu`/`--tpu` values are rejected with the supported list instead of silently picking A100 or v6e1 (upstream #211).
+- **security:** when a file command fails (`upload`, `download`, `ls`, `rm`), the error no longer shows the runtime proxy token from the request URL.
+- **ssh, forward (Windows binary):** closing the terminal tab or force-killing the standalone `colab.exe` also ends ssh.exe and its proxy. Before, they kept running in the background.
+- **ssh, forward:** without an SSH key, `colab ssh` and `colab forward` exit 2 with a clear message before creating a runtime, instead of ssh's exit 255 after one was created. The message names other ed25519/ECDSA keys found in `~/.ssh` and how to pass one with `-i`.
+- **edit:** a failing editor gives a one-line error (exit 1) instead of a traceback.
+- **files (Git Bash on Windows):** `colab ls /content` and the other file commands work from Git Bash, which rewrote the remote path to `C:/Program Files/Git/content`.
+- **version:** a local install (`uv run colab version`) and binaries built from it report the current commit's version, not the one from when the environment was created.
+
 ## [0.7.5.2] - 2026-11-03
 
 Still based on Google's Colab CLI 0.7.5.
@@ -133,6 +164,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.1
 [0.7.5.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.2
 [0.7.5.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.1
 [0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0

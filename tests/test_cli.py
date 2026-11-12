@@ -17,7 +17,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
@@ -117,6 +119,32 @@ def test_cli_new_gpu_variants(mock_client, mock_store, gpu_flag, expected_acc):
 
     added_state = mock_store.add.call_args[0][0]
     assert added_state.accelerator == expected_acc
+
+
+@pytest.mark.parametrize("gpu_flag", ["A10O", "foo", "V100", "t4x"])
+def test_cli_new_rejects_unknown_gpu(mock_client, mock_store, gpu_flag):
+    """A typo must not silently provision an A100."""
+    result = runner.invoke(app, ["new", "-s", "s", "--gpu", gpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {gpu_flag!r}" in result.output
+    # The full list is asserted in tests/test_runtime_options.py; the rich
+    # error panel wraps long lines, so only check that --gpu is named here.
+    assert "--gpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize("tpu_flag", ["v4", "foo", "v5e"])
+def test_cli_new_rejects_unknown_tpu(mock_client, mock_store, tpu_flag):
+    """Only v5e1 and v6e1 exist; anything else used to become v6e1."""
+    result = runner.invoke(app, ["new", "-s", "s", "--tpu", tpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {tpu_flag!r}" in result.output
+    assert "--tpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
 
 
 def test_cli_sessions_unified_format(mock_client, mock_common_state):
@@ -393,7 +421,7 @@ def _extract_command_names(help_output: str) -> list[str]:
     inside the `╭─ Commands ─...` rich box. Returns names in the order they
     appear.
     """
-    lines = help_output.splitlines()
+    lines = click.unstyle(help_output).splitlines()
     in_commands = False
     names = []
     for line in lines:
@@ -450,18 +478,19 @@ def test_cli_no_args():
     assert result.exit_code in [0, 2]
 
 
-def test_cli_console(mock_store, mock_common_state):
-    mock_session_state = MagicMock()
-    mock_session_state.name = "s1"
-    mock_session_state.token = "t1"
-    mock_session_state.url = "http://test.com"
-    mock_store.get.return_value = mock_session_state
+def test_cli_console_removed():
+    assert "console" not in typer.main.get_command(app).commands
 
-    mock_common_state.resolve_session.return_value = "s1"
-    with patch("colab_cli.commands.execution.connect_console") as mock_connect:
-        result = runner.invoke(app, ["console", "-s", "s1"])
-        assert result.exit_code == 0
-        mock_connect.assert_called_once_with(mock_session_state)
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, result.output
+    names = _extract_command_names(result.output)
+    assert names, result.output
+    assert "ssh" in names, result.output
+    assert "console" not in names, result.output
+
+    result = runner.invoke(app, ["console"])
+    assert result.exit_code == click.UsageError.exit_code, result.output
+    assert "No such command" in result.output, result.output
 
 
 @patch("colab_cli.commands.files.ContentsClient")
@@ -844,3 +873,74 @@ def test_main_explains_a_timeout(mocker, capsys):
     err = capsys.readouterr().err
     assert "[colab] Execution exceeded the 30 s timeout" in err
     assert "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "argv, method",
+    [
+        (["ls", "-s", "s1", "/content"], "list_dir"),
+        (["rm", "-s", "s1", "/content/x"], "rm"),
+        (["download", "-s", "s1", "/content/x", "x"], "download"),
+    ],
+)
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_file_errors_redact_tokens(
+    mock_contents_class, mock_store, mock_common_state, argv, method
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    getattr(mock_contents_class.return_value, method).side_effect = RuntimeError(
+        "boom url: https://h/api?colab-runtime-proxy-token=LEAKED-TOKEN"
+    )
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+    assert "LEAKED-TOKEN" not in result.output
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        click.ClickException("vim: Editing failed"),
+        click.UsageError("vim: Editing failed"),
+    ],
+)
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_edit_failing_editor_is_a_clean_error(
+    mock_contents_class, mock_store, mock_common_state, mocker, error
+):
+    """Typer vendors its own Click (typer._click), so a ClickException from
+    the real click package, raised by click.edit or _launch_editor, is not
+    handled by Typer and ended in a traceback."""
+    from colab_cli.commands import files
+
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch.object(files, "_launch_editor", side_effect=error)
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "remote.txt"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[colab] vim: Editing failed" in result.output
+    mock_contents_class.return_value.upload.assert_not_called()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_ls_undoes_git_bash_path_conversion(
+    mock_contents_class, mock_store, mock_common_state, mocker
+):
+    mocker.patch(
+        "colab_cli.commands.files.undo_msys_path",
+        side_effect=lambda p: "/content" if p.startswith("C:/") else p,
+    )
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.list_dir.return_value = {"type": "directory"}
+
+    result = runner.invoke(app, ["ls", "-s", "s1", "C:/Program Files/Git/content"])
+
+    assert result.exit_code == 0, result.output
+    mock_contents_class.return_value.list_dir.assert_called_once_with("/content")

@@ -1,3 +1,8 @@
+---
+log:
+2026-11-12: Errors no longer show the runtime proxy token: `ContentsClient` reports an HTTP error as status and path (requests put the full URL, token included, in its message) and the file commands print errors through `common.redact_secrets`. Under Git Bash on Windows, remote paths that MSYS rewrote (`/content` -> `C:/Program Files/Git/content`) are turned back by `utils.undo_msys_path`. A failing editor in `colab edit` prints `[colab] ...: Editing failed` and exits 1 instead of a traceback (Typer vendors its own Click and does not handle `click.ClickException`).
+---
+
 # Design: File Management (`ls`, `rm`, `upload`, `download`, `edit`)
 
 ## Overview
@@ -31,7 +36,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 ### 3. Downloading Files (`colab download`)
 - **API**: `GET /api/contents/<remote_path>?content=1` (as seen in HAR).
 - **Response**: JSON with `content` field.
-- **Handling**: Decodes content based on `format` (text or base64) and saves it locally.
+- **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.
@@ -40,11 +45,13 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 - **Approach**: Combines downloading the remote file, opening it in the user's `$EDITOR` locally, and subsequently uploading the changed file if modifications were made.
 - **State tracking**: Uses a SHA-256 hash to track file changes securely and deterministically between before and after the editor is invoked.
 - **Fallbacks**: Creates an empty local temporary file if the target file on the Colab runtime doesn't exist yet, essentially acting like `touch`.
+- **Editor failure**: a non-zero exit or a missing editor prints `[colab] <editor>: Editing failed` and exits 1; nothing is uploaded.
 
 ## Implementation Details
 - **Base URL**: The backend URL obtained during session assignment.
 - **Proxy Token**: The `colab-runtime-proxy-token` is required for each request.
-- **Error Handling**: Handle 404 (not found) and 403 (unauthorized).
+- **Error Handling**: Handle 404 (not found) and 403 (unauthorized). Other HTTP errors are reported as `<status> <reason> for /api/contents/<path>`, never with the request URL, whose query carries the proxy token; printed errors also pass through `redact_secrets`.
+- **Git Bash paths**: MSYS rewrites POSIX-looking arguments for native programs. On Windows with `MSYSTEM` set, `ls`, `rm`, `upload`, `download` and `edit` turn a remote path inside the MSYS root (`cygpath -m /`, else `EXEPATH`) back into a POSIX path. Linux and macOS are unaffected.
 - **Large Files**: The Contents API might have limitations for very large files. If so, we'll implement a fallback via the kernel (streaming chunks).
 
 ## Testing Strategy

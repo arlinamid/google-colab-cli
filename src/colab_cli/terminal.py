@@ -14,69 +14,30 @@
 
 """Cross-platform terminal helpers.
 
-POSIX keeps using ``termios`` raw mode in ``console.py``. Windows consoles
-(cmd.exe and PowerShell, both conhost and Windows Terminal) have no
-``termios``, no ``/dev/tty``, and no ``SIGWINCH``. This module owns the
-Windows console-mode and key-translation pieces, plus the controlling-terminal
+Windows consoles (cmd.exe and PowerShell, both conhost and Windows Terminal)
+have no ``/dev/tty`` and leave ANSI processing off. This module owns the
+Windows console-mode and command-line pieces, plus the controlling-terminal
 line read used by interactive prompts.
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Optional
 
 # Win32 console mode flags. See
 # https://learn.microsoft.com/en-us/windows/console/setconsolemode
 _ENABLE_PROCESSED_OUTPUT = 0x0001
 _ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-_ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
-_ENABLE_EXTENDED_FLAGS = 0x0080
 
-_STD_INPUT_HANDLE = -10
 _STD_OUTPUT_HANDLE = -11
 _STD_ERROR_HANDLE = -12
-
-# Second byte of a Windows console special key (after \x00 or \xe0) mapped to
-# the ANSI sequence a POSIX raw tty would emit for the same key.
-_SCAN_TO_ANSI = {
-    "H": "\x1b[A",  # up
-    "P": "\x1b[B",  # down
-    "M": "\x1b[C",  # right
-    "K": "\x1b[D",  # left
-    "G": "\x1b[H",  # home
-    "O": "\x1b[F",  # end
-    "I": "\x1b[5~",  # page up
-    "Q": "\x1b[6~",  # page down
-    "S": "\x1b[3~",  # delete
-    "R": "\x1b[2~",  # insert
-}
 
 
 def is_windows() -> bool:
     """True on Windows, including cmd.exe and PowerShell."""
     return os.name == "nt"
-
-
-def translate_windows_key(first: str, second: Optional[str] = None) -> str:
-    """Map one Windows console key event to bytes a POSIX raw tty would send.
-
-    ``msvcrt.getwch`` returns a Unicode character. Special keys arrive as
-    ``\\x00`` or ``\\xe0`` followed by a scan-code character. Arrow keys must
-    become ANSI sequences so the remote shell's line editor understands them.
-    Enter arrives as ``\\r``, which is also what a POSIX raw terminal sends
-    (local ICRNL is off; the remote pty's ICRNL turns ``\\r`` into ``\\n``).
-    Unrecognized scan codes return an empty string so they are not forwarded
-    as garbage.
-    """
-    if first in ("\x00", "\xe0"):
-        if not second:
-            return ""
-        return _SCAN_TO_ANSI.get(second, "")
-    return first
 
 
 def enable_windows_virtual_terminal() -> bool:
@@ -112,52 +73,6 @@ def enable_windows_virtual_terminal() -> bool:
         return updated
     except Exception:
         return False
-
-
-@contextmanager
-def windows_raw_console() -> Iterator[None]:
-    """Put the Windows console input handle into raw (non-line) mode.
-
-    Clears line-input, echo, and processed-input so keystrokes — including
-    Ctrl-C as ``\\x03`` — reach this process instead of being edited by
-    conhost or killing the local CLI. Enables virtual-terminal input so newer
-    consoles can emit ANSI sequences themselves. Restores the previous mode
-    on exit. No-op when this is not a Windows console (pipes, POSIX).
-    """
-    if not is_windows():
-        yield
-        return
-    import ctypes
-
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
-    old = ctypes.c_uint()
-    if not kernel32.GetConsoleMode(handle, ctypes.byref(old)):
-        yield
-        return
-    # Leaving LINE/ECHO/PROCESSED unset is the raw mode. EXTENDED_FLAGS has
-    # to be set for the mode change to stick on modern conhost.
-    raw = _ENABLE_VIRTUAL_TERMINAL_INPUT | _ENABLE_EXTENDED_FLAGS
-    kernel32.SetConsoleMode(handle, raw)
-    try:
-        yield
-    finally:
-        kernel32.SetConsoleMode(handle, old.value)
-
-
-def read_windows_key() -> str:
-    """Block for one Windows console key and return an ANSI-compatible string.
-
-    Returns ``""`` for an unrecognized scan code. The caller should not
-    forward that.
-    """
-    import msvcrt
-
-    first = msvcrt.getwch()
-    if first in ("\x00", "\xe0"):
-        second = msvcrt.getwch()
-        return translate_windows_key(first, second)
-    return translate_windows_key(first)
 
 
 PROMPT_FROM_STDIN_ENV = "COLAB_CLI_PROMPT_FROM_STDIN"
@@ -278,47 +193,3 @@ def split_windows_command_line(cmd: str) -> list[str]:
         return [argv[i] for i in range(argc.value)]
     finally:
         ctypes.windll.kernel32.LocalFree(argv)
-
-
-# Sequences a terminal answers by typing the reply into its own input:
-# DA1/DA2/DA3 (CSI c, CSI > c, CSI = c), XTVERSION (CSI > q), DSR/CPR
-# (CSI n) and OSC color queries (OSC Ps [; Pn] ; ? ST). tmux on the runtime sends
-# several of these when the console attaches.
-_TERMINAL_QUERY = re.compile(
-    r"\x1b\[[>=]?[0-9;]*c"
-    r"|\x1b\[>[0-9;]*q"
-    r"|\x1b\[[0-9;]*n"
-    r"|\x1b\][0-9]+(?:;[0-9]+)*;\?(?:\x07|\x1b\\)"
-)
-# A query cut off at the end of a websocket message.
-_PARTIAL_QUERY = re.compile(r"\x1b(?:\[[>=]?[0-9;]*|\][0-9;]*\??\x1b?)?\Z")
-_MAX_PENDING = 32
-
-
-class TerminalQueryFilter:
-    """Remove terminal queries from a stream of output chunks.
-
-    Used when ``colab console`` reads piped stdin. The local terminal still
-    answers the queries, but the answers go to the terminal's input, which
-    the CLI is not reading, so they cannot reach the remote side. They are
-    left behind and show up in whatever reads the terminal next (the shell
-    prompt, the next command's Enter prompt). Dropping the queries avoids
-    that. A sequence split across chunks is held back until it completes.
-    """
-
-    def __init__(self) -> None:
-        self._pending = ""
-
-    def feed(self, text: str) -> str:
-        text = self._pending + text
-        self._pending = ""
-        partial = _PARTIAL_QUERY.search(text)
-        if partial and len(text) - partial.start() <= _MAX_PENDING:
-            self._pending = text[partial.start() :]
-            text = text[: partial.start()]
-        return _TERMINAL_QUERY.sub("", text)
-
-    def flush(self) -> str:
-        """Return held-back text that never completed into a query."""
-        pending, self._pending = self._pending, ""
-        return pending

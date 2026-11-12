@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-import threading
+import queue
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -34,6 +34,12 @@ class SessionConnectionLost(RuntimeError):
     def __init__(self, session_name: Optional[str]):
         self.session_name = session_name
         super().__init__(f"Lost the connection to session '{session_name}'.")
+
+
+# The longest single wait for a kernel message, so a lost connection is noticed.
+_WAIT_SLICE_SEC = 1.0
+# Kernel states that end any execution in progress.
+_KERNEL_GONE = frozenset({"dead", "restarting"})
 
 
 class ColabRuntime:
@@ -202,6 +208,13 @@ class ColabRuntime:
                 raise SessionConnectionLost(self.session_name) from e
             raise
 
+    def _interrupt_quietly(self):
+        """Interrupt the running cell; the kernel may already be gone."""
+        try:
+            self.kernel_client.interrupt()
+        except Exception as e:
+            logger.debug(f"Interrupt after timeout failed: {e}")
+
     def execute_code(
         self,
         code: str,
@@ -210,65 +223,55 @@ class ColabRuntime:
         output_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        # ``timeout`` is never handed to jupyter_kernel_client. There it is a
-        # deadline fixed when the call starts (default ``REQUEST_TIMEOUT``,
-        # 10 s, on ``execute``): once it passes, the output loop keeps going
-        # but waits with ``timeout=0`` (a busy loop at 100% CPU), and after
-        # the kernel goes idle the final reply is awaited for 0 s, so any
-        # execution longer than the deadline raised "Timeout waiting for
-        # reply" whenever the reply trailed the idle status by a moment.
-        # Here ``timeout=None`` means no limit; a number interrupts the
-        # kernel when it is exceeded and raises TimeoutError.
-        kwargs = {"allow_stdin": allow_stdin, "timeout": None}
-        expired = threading.Event()
-        watchdog = None
-        if timeout is not None:
-
-            def _expire():
-                expired.set()
-                try:
-                    self.kernel_client.interrupt()
-                except Exception as e:  # the kernel may be gone already
-                    logger.debug(f"Interrupt after timeout failed: {e}")
-
-            watchdog = threading.Timer(timeout, _expire)
-            watchdog.daemon = True
-            watchdog.start()
-        try:
-            return self._execute_code(
-                code, allow_stdin, stdin_hook, output_hook, kwargs
+        if allow_stdin and output_hook is not None:
+            raise NotImplementedError(
+                "output_hook is not supported when allow_stdin is True"
             )
-        finally:
-            if watchdog is not None:
-                watchdog.cancel()
-            if expired.is_set():
-                raise TimeoutError(
-                    f"Execution exceeded the {timeout:g} s timeout; "
-                    "the kernel was interrupted."
-                )
 
-    def _execute_code(self, code, allow_stdin, stdin_hook, output_hook, kwargs):
-
-        # Wrap stdin_hook to log inputs
-        original_stdin_hook = stdin_hook
-
-        def wrapped_stdin_hook(prompt):
-            if self.history and self.session_name:
-                self.history.log_event(
-                    self.session_name, "stdin_request", {"prompt": prompt}
-                )
-
-            res = original_stdin_hook(prompt) if original_stdin_hook else input(prompt)
-
-            if self.history and self.session_name:
-                self.history.log_event(self.session_name, "input_reply", {"value": res})
-            return res
-
+        # ``timeout`` means one of two things, depending on ``allow_stdin``:
+        # - Without stdin (``allow_stdin`` False; used by run, exec, repl, and
+        #   install): ``_execute_streaming`` waits for messages itself, and
+        #   ``timeout`` is an idle limit. ``None`` or a value <= 0 means no
+        #   limit.
+        # - With stdin (``allow_stdin`` True; used by auth and drivemount):
+        #   the call goes to ``jupyter_kernel_client``, where ``timeout`` is a
+        #   deadline for the whole call, defaulting to ``REQUEST_TIMEOUT``
+        #   (10 s). Callers that need a longer ceiling pass ``timeout=``
+        #   explicitly.
         if allow_stdin:
-            kwargs["stdin_hook"] = wrapped_stdin_hook
+            original_stdin_hook = stdin_hook
 
-        if output_hook:
-            # If we have an output hook, we use execute_interactive and manage buffering ourselves
+            def wrapped_stdin_hook(prompt):
+                if self.history and self.session_name:
+                    self.history.log_event(
+                        self.session_name, "stdin_request", {"prompt": prompt}
+                    )
+
+                res = (
+                    original_stdin_hook(prompt)
+                    if original_stdin_hook
+                    else input(prompt)
+                )
+
+                if self.history and self.session_name:
+                    self.history.log_event(
+                        self.session_name, "input_reply", {"value": res}
+                    )
+                return res
+
+            kwargs: Dict[str, Any] = {
+                "allow_stdin": True,
+                "stdin_hook": wrapped_stdin_hook,
+            }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+
+            reply = self._run(self.kernel_client.execute, code, **kwargs)
+            if not reply:
+                return []
+            outputs = reply.get("outputs", [])
+            reply_content = reply
+        else:
             outputs = []
 
             def wrapped_output_hook(msg):
@@ -279,25 +282,21 @@ class ColabRuntime:
                 # Update local outputs list using the default logic
                 new_indexes = default_output_hook(outputs, msg)
                 # If new outputs were added, call our streaming hook with the new data
-                if new_indexes:
+                if output_hook and new_indexes:
                     for idx in sorted(new_indexes):
                         if idx < len(outputs):
                             output_hook(outputs[idx])
 
-            reply = self._run(
-                self.kernel_client.execute_interactive,
-                code,
-                output_hook=wrapped_output_hook,
-                **kwargs,
-            )
-            # execute_interactive returns the raw reply message
+            try:
+                reply = self._run(
+                    self._execute_streaming, code, wrapped_output_hook, timeout
+                )
+            except TimeoutError as e:
+                # Unlike upstream, stop the code too: a timed-out run should
+                # not keep the runtime busy (and billing) in the background.
+                self._interrupt_quietly()
+                raise TimeoutError(f"{e} The kernel was interrupted.") from e
             reply_content = reply["content"] if reply else {"status": "error"}
-        else:
-            reply = self._run(self.kernel_client.execute, code, **kwargs)
-            if not reply:
-                return []
-            outputs = reply.get("outputs", [])
-            reply_content = reply
 
         # If there's an error status but no error in outputs, synthesize one
         if reply_content.get("status") == "error":
@@ -313,6 +312,66 @@ class ColabRuntime:
                 )
 
         return outputs
+
+    def _execute_streaming(
+        self,
+        code: str,
+        output_hook: Callable[[Dict[str, Any]], None],
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        """Run ``code``, pass each output message to ``output_hook``, return the reply.
+
+        ``timeout`` is an idle limit: how long to wait, in seconds, for the next
+        message from this execution. A run that keeps printing can take as long
+        as it needs, and ``None`` or a value <= 0 waits without a limit. This
+        replaces ``jupyter_kernel_client``'s ``execute_interactive``, whose
+        deadline covers the whole run and which, in 0.8.0 and 0.9.0, polls
+        without waiting once the deadline passes.
+
+        Like ``_apply_ws_hook``, this uses the websocket client behind the
+        kernel client. It skips that library's per-client execution lock,
+        because a ColabRuntime runs one execution at a time.
+        """
+        if timeout is not None and timeout <= 0:
+            timeout = None
+        client = self.kernel_client._manager.client
+        msg_id = client.execute(code, allow_stdin=False)
+
+        def next_message(get_msg, waiting_for):
+            deadline = (time.monotonic() + timeout) if timeout is not None else None
+            while True:
+                if not client.connection_ready.is_set():
+                    raise RuntimeError("Connection was lost.")
+                wait = _WAIT_SLICE_SEC
+                if deadline is not None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError(
+                            f"Timeout waiting for {waiting_for}: no message from "
+                            f"the kernel for {timeout:g}s. Use --timeout to allow "
+                            "longer silences."
+                        )
+                    wait = min(wait, left)
+                try:
+                    msg = get_msg(timeout=wait)
+                except queue.Empty:
+                    continue
+                state = msg["content"].get("execution_state")
+                if msg["header"]["msg_type"] == "status" and state in _KERNEL_GONE:
+                    # The kernel announces these to every client, without a
+                    # parent, and our execution can no longer finish.
+                    raise RuntimeError(f"Kernel {state} before the code finished.")
+                if msg["parent_header"].get("msg_id") == msg_id:
+                    return msg
+
+        while True:
+            msg = next_message(client.get_iopub_msg, "output")
+            output_hook(msg)
+            if (
+                msg["header"]["msg_type"] == "status"
+                and msg["content"].get("execution_state") == "idle"
+            ):
+                return next_message(client.get_shell_msg, "reply")
 
     def stop(self, shutdown_kernel: bool = False):
         if self._kernel_client:

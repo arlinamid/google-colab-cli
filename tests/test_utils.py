@@ -19,7 +19,12 @@ import pytest
 from rich.markdown import Markdown
 from rich.text import Text
 
-from colab_cli.utils import handle_image, print_kitty, render_display_data
+from colab_cli.utils import (
+    handle_image,
+    open_url_in_browser,
+    print_kitty,
+    render_display_data,
+)
 
 
 @patch("colab_cli.utils.sys.stdout.isatty", return_value=True)
@@ -85,3 +90,106 @@ def test_render_display_data_plain():
 
 def test_render_display_data_none():
     assert render_display_data({"image/png": "..."}) is None
+
+
+@patch("colab_cli.utils.webbrowser.open", return_value=True)
+def test_open_url_in_browser_reports_success(mock_open):
+    assert open_url_in_browser("https://example.com/auth") is True
+    mock_open.assert_called_once_with("https://example.com/auth")
+
+
+@patch("colab_cli.utils.webbrowser.open", return_value=False)
+def test_open_url_in_browser_headless_returns_false(mock_open):
+    """No browser opener (SSH, containers, CI) must not raise."""
+    assert open_url_in_browser("https://example.com/auth") is False
+
+
+@patch("colab_cli.utils.webbrowser.open", side_effect=OSError("no opener"))
+def test_open_url_in_browser_swallows_opener_errors(mock_open):
+    assert open_url_in_browser("https://example.com/auth") is False
+
+
+# Git Bash (MSYS) rewrites arguments that look like POSIX paths before a
+# native program sees them: `colab ls /content` arrives as
+# `C:/Program Files/Git/content`. Remote paths are never Windows paths, so
+# the CLI turns them back.
+GIT_ROOT = "C:/Program Files/Git"
+
+
+@pytest.fixture
+def git_bash(mocker, monkeypatch):
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", "win32")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        ("C:/Program Files/Git/content/x.txt", "/content/x.txt"),
+        ("c:/program files/git/content", "/content"),
+        (r"C:\Program Files\Git\content\x", "/content/x"),
+        ("C:/Program Files/Git/", "/"),
+        ("C:/Program Files/Git", "/"),
+        ("/content/x.txt", "/content/x.txt"),
+        ("content/x.txt", "content/x.txt"),
+        ("D:/data/x.txt", "D:/data/x.txt"),
+        ("C:/Program Files/Gitlab/x", "C:/Program Files/Gitlab/x"),
+    ],
+)
+def test_undo_msys_path_under_git_bash(git_bash, given, expected):
+    from colab_cli.utils import undo_msys_path
+
+    assert undo_msys_path(given) == expected
+
+
+def test_undo_msys_path_outside_git_bash(mocker, monkeypatch):
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", "win32")
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    root = mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+    path = "C:/Program Files/Git/content"
+    assert utils.undo_msys_path(path) == path
+    root.assert_not_called()
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_undo_msys_path_is_windows_only(mocker, monkeypatch, platform):
+    """On Linux and macOS a remote path named like a Windows path is kept."""
+    from colab_cli import utils
+
+    mocker.patch.object(utils.sys, "platform", platform)
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    mocker.patch.object(utils, "_msys_root", return_value=GIT_ROOT)
+
+    path = "C:/Program Files/Git/content"
+    assert utils.undo_msys_path(path) == path
+
+
+def test_msys_root_asks_cygpath(mocker):
+    from colab_cli import utils
+
+    utils._msys_root.cache_clear()
+    run = mocker.patch.object(
+        utils.subprocess, "run", return_value=MagicMock(stdout="C:/Program Files/Git/\n")
+    )
+    assert utils._msys_root() == GIT_ROOT
+    assert run.call_args.args[0] == ["cygpath", "-m", "/"]
+    utils._msys_root.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "exepath", [r"C:\Program Files\Git\bin", r"C:\Program Files\Git"]
+)
+def test_msys_root_falls_back_to_exepath(mocker, monkeypatch, exepath):
+    from colab_cli import utils
+
+    utils._msys_root.cache_clear()
+    mocker.patch.object(utils.subprocess, "run", side_effect=FileNotFoundError)
+    monkeypatch.setenv("EXEPATH", exepath)
+    assert utils._msys_root() == GIT_ROOT
+    utils._msys_root.cache_clear()

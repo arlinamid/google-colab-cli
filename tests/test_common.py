@@ -123,3 +123,16 @@ def test_sync_sessions_updates_tokens(real_state):
     assert sessions["s1"].token == "new-token"
     assert real_state.store.get("s1").token == "new-token"
     assert real_state.store.get("s1").token_expires_at is not None
+
+
+def test_redact_secrets_masks_query_tokens_and_bearer():
+    from colab_cli.common import redact_secrets
+
+    text = (
+        "500 for url: https://x.colab.dev/api?authuser=0"
+        "&colab-runtime-proxy-token=eyJabc.def&x=1 Authorization: Bearer abcdefghijkl"
+    )
+    out = redact_secrets(text)
+    assert "eyJabc.def" not in out
+    assert "abcdefghijkl" not in out
+    assert "authuser=0" in out

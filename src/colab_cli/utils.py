@@ -13,11 +13,17 @@
 # limitations under the License.
 
 import base64
+import functools
 import html2text
 import logging
+import ntpath
+import os
+import re
+import subprocess
 import sys
 import tempfile
 import tokenize
+import webbrowser
 
 from typing import Optional, Union
 
@@ -64,6 +70,58 @@ def utf8_text_stream(stream):
     return stream
 
 
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+@functools.lru_cache(maxsize=1)
+def _msys_root() -> Optional[str]:
+    """Windows path of the Git Bash (MSYS) root, like ``C:/Program Files/Git``."""
+    root = ""
+    try:
+        root = subprocess.run(
+            ["cygpath", "-m", "/"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        # git-bash.exe sets EXEPATH to the install root or its bin folder.
+        # Always a Windows path: ntpath splits it the same on every OS.
+        exepath = os.environ.get("EXEPATH", "").rstrip("\\/")
+        if ntpath.basename(exepath).lower() == "bin":
+            exepath = ntpath.dirname(exepath)
+        root = exepath
+    return root.replace("\\", "/").rstrip("/") or None
+
+
+def undo_msys_path(path: str) -> str:
+    """Turns a remote path that Git Bash rewrote back into a POSIX path.
+
+    Git Bash (MSYS) converts arguments that look like POSIX paths before a
+    native Windows program sees them, so ``colab ls /content`` arrives as
+    ``C:/Program Files/Git/content``. Remote paths are never Windows paths,
+    so under Git Bash one inside the MSYS root is turned back into
+    ``/content``. Anything else, and every path on Linux and macOS, is
+    returned unchanged.
+    """
+    if (
+        sys.platform != "win32"
+        or not os.environ.get("MSYSTEM")
+        or not _DRIVE_PATH.match(path)
+    ):
+        return path
+    root = _msys_root()
+    if not root:
+        return path
+    normalized = path.replace("\\", "/")
+    if normalized.rstrip("/").lower() == root.lower():
+        return "/"
+    if normalized.lower().startswith(root.lower() + "/"):
+        return normalized[len(root):]
+    return path
+
+
 def get_status_code(e: Exception) -> Optional[int]:
     """Safely extracts status code from various exception types."""
     if hasattr(e, "response") and e.response is not None:
@@ -84,6 +142,20 @@ def is_terminal_error(e: Exception) -> bool:
     if "404" in err_msg or "401" in err_msg:
         return True
     return False
+
+
+def open_url_in_browser(url: str) -> bool:
+    """Open ``url`` in the user's default browser.
+
+    Returns ``True`` when a browser was launched and ``False`` when no opener
+    is available (headless SSH hosts, containers, CI) or the opener fails.
+    Callers must keep showing the URL so those environments can still complete
+    the flow manually.
+    """
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
 
 
 def print_kitty(image_bytes: bytes):

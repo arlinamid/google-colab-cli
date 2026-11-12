@@ -12,11 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import keyring
+import keyring.backends.null
 import pytest
 import typer
 from unittest.mock import MagicMock
 
 from colab_cli.auth import AuthProvider
+
+
+@pytest.fixture(autouse=True)
+def isolate_keyring():
+    """Never touch the host OS keyring during unit tests."""
+    prev = keyring.get_keyring()
+    keyring.set_keyring(keyring.backends.null.Keyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(prev)
 
 
 @pytest.fixture(autouse=True)
@@ -52,3 +65,30 @@ def mock_common_state(mocker):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture(autouse=True)
+def default_ssh_key(tmp_path_factory, monkeypatch):
+    """Give `colab ssh`'s key pre-check a default key, whatever the host has.
+
+    tests/test_ssh_key_precheck.py replaces it to test the check itself.
+    """
+    from colab_cli.commands import ssh
+
+    ssh_dir = tmp_path_factory.mktemp("home") / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAATEST test@host\n")
+    monkeypatch.setattr(ssh, "_ssh_dir", lambda: ssh_dir)
+    return ssh_dir
+
+
+@pytest.fixture(autouse=True)
+def plain_rich_output(monkeypatch):
+    """Keep Typer's error panels free of ANSI colour codes, as on a terminal.
+
+    Typer forces colour when GITHUB_ACTIONS (or FORCE_COLOR/PY_COLORS) is
+    set, which splits words such as "--gpu" with escape codes in CI only.
+    """
+    import typer.rich_utils
+
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", None)

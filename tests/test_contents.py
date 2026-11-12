@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -124,6 +125,42 @@ def test_download_file(mock_request, client, tmp_path):
 
 
 @patch("colab_cli.contents.requests.request")
+def test_download_notebook_json_format(mock_request, client, tmp_path):
+    """Downloading a format=json payload serializes valid 2-space indented JSON."""
+    notebook_doc = {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["# Demo"]},
+            {
+                "cell_type": "code",
+                "execution_count": 1,
+                "metadata": {},
+                "outputs": [],
+                "source": ["x = 42\n", "print(x)"],
+            },
+        ],
+        "metadata": {"kernelspec": {"display_name": "Python 3", "name": "python3"}},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "demo.ipynb",
+        "type": "notebook",
+        "format": "json",
+        "content": notebook_doc,
+    }
+    mock_request.return_value = mock_resp
+
+    local_file = tmp_path / "demo.ipynb"
+    client.download("content/demo.ipynb", str(local_file))
+
+    raw = local_file.read_text(encoding="utf-8")
+    assert json.loads(raw) == notebook_doc
+    assert raw == json.dumps(notebook_doc, indent=2)
+
+
+@patch("colab_cli.contents.requests.request")
 def test_upload_file(mock_request, client, tmp_path):
     mock_resp = MagicMock(spec=Response)
     mock_resp.status_code = 200
@@ -150,3 +187,33 @@ def test_upload_file(mock_request, client, tmp_path):
             "chunk": 1,
         },
     )
+
+
+def _http_error_response(status, reason):
+    from requests import Response as RealResponse
+
+    resp = RealResponse()
+    resp.status_code = status
+    resp.reason = reason
+    resp.url = (
+        "https://fake-endpoint.colab.dev/api/contents/up.txt"
+        "?authuser=0&colab-runtime-proxy-token=SECRET-PROXY-TOKEN"
+    )
+    return resp
+
+
+@patch("colab_cli.contents.requests.request")
+def test_http_error_message_hides_the_proxy_token(mock_request, client):
+    """requests puts the full URL, query string included, in HTTPError. The
+    runtime proxy token is a query parameter, so it must not reach the
+    message that `colab upload` and friends print."""
+    mock_request.return_value = _http_error_response(500, "Internal Server Error")
+
+    with pytest.raises(Exception) as excinfo:
+
+        client.list_dir("up.txt")
+
+    message = str(excinfo.value)
+    assert "SECRET-PROXY-TOKEN" not in message
+    assert "500" in message
+    assert "up.txt" in message

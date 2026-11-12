@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import json
 from urllib.parse import quote
 
 import requests
@@ -42,7 +43,16 @@ class ContentsClient:
         if get_status_code(response) == 404:
             raise FileNotFoundError(f"File or directory not found: {path}")
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            # requests names the full URL, and the runtime proxy token is a
+            # query parameter of it: report the status and path only.
+            raise requests.HTTPError(
+                f"{e.response.status_code} {e.response.reason} for "
+                f"/api/contents/{quoted_path}",
+                response=e.response,
+            ) from None
 
         # DELETE doesn't return JSON
         if method == "DELETE":
@@ -82,6 +92,8 @@ class ContentsClient:
 
         if fmt == "base64":
             content_bytes = base64.b64decode(content)
+        elif fmt == "json":
+            content_bytes = json.dumps(content, indent=2).encode("utf-8")
         else:
             # Assume text if it's not base64 explicitly encoded
             content_bytes = str(content).encode("utf-8")
