@@ -92,6 +92,12 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - Every `--json` summary of `exec`/`run`, and `job status|wait --json`, has `cost`: `rate_cu_per_hour`, `balance_cu`, `used_cu_estimate` (rate x duration; high, never low, with several runtimes), `hours_left_at_rate`.
 - `--budget CU` on `exec`, `run` (before the script path) and `job start`: the run is stopped once the estimate reaches the budget. `exec`/`run` exit 5 with diagnosis `budget_reached`; a job ends `stopped` with `stop_reason: "budget"` (enforced on the runtime, so it works with no client connected). Set a budget for anything that could run away on a GPU.
 
+### Learn from earlier runs (`colab history`)
+- A failed cell's `diagnosis.seen_before` (in `--json` results) is null for a new error, or `{"count", "last_seen", "sessions", "last_fix"}`. `last_fix` is what made the same failure go away last time: `steps` (`{"install": [...]}` from `colab install` or `!pip install`, `{"upload": PATH}`), `code_changed`, `attempts`, `after_s`. Try those steps first before inventing a new fix.
+- `colab history errors [--since 7d] [-s NAME] --json`: recurring failures across all sessions (`"type": "error_group"`), each with `count`, `where`, `sessions` and `last_fix`.
+- `colab history stats [FILE] --json`: per file `runs`, `success_rate`, `median_duration_s`, `max_duration_s`, `median_cost_cu`, `top_errors` (`"type": "file_stats"`). Check it before a long or expensive run to pick a sensible `--timeout`, `--budget` or `colab job`.
+- All of this is read from the local history only; nothing is sent anywhere.
+
 ### Automate
 - `colab auth -s <name>` — VM-side GCP creds, needed before in-VM GCS/BigQuery calls (interactive; not agent-runnable).
 - `colab drivemount -s <name> [--authuser N] [PATH]` — mounts Drive at `/content/drive` by default (interactive; not agent-runnable). The user must approve the printed consent URL in a browser as the same account `colab whoami` shows; a multi-account browser rejects the mount with HTTP 400 unless that account is the one selected on the chooser. The kernel waits 10 minutes, not 2.

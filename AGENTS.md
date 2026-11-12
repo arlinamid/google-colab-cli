@@ -13,7 +13,7 @@
 - **State**:
   - `StateStore` persists session metadata in `~/.config/colab-cli/sessions.json`.
   - Persistent settings are in `~/.config/colab-cli/settings.json`.
-- **History**: `HistoryLogger` records structured events in `~/.config/colab-cli/history/*.jsonl`.
+- **History**: `HistoryLogger` records structured events in `~/.config/colab-cli/history/*.jsonl`. `execution` events also carry `status`, `file`, `label`, `duration_s`, `error` and `diagnosis` (`results.history_fields`); `experience.py` reads them for `colab history` and `seen_before` (docs/08_agent_feedback.md, phase E). Keep new execution paths logging those fields.
 
 ## Core Mandates
 - **Minimalism**: Favor standard library where possible (e.g., `urllib`) while utilizing `Typer` for CLI ergonomics.

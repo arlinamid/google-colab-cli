@@ -101,6 +101,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; Python jobs can report metrics with `colab_feedback.report()` |
 | `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
 | `colab inspect [-s NAME] [--vars] [--gpu] [--disk] [--packages] [--files PATH] [--json]` | Show the kernel's variables (types and shapes, never values), GPU, disk, memory and packages installed since the first inspect; a busy kernel is not queued behind |
+| `colab history errors\|stats [-s NAME] [--since 7d] [--json]` | Learn from earlier runs: recurring failures and what fixed them last time; runs, success rate, usual duration and cost per file (local history only) |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
 | `colab share [-s NAME] PORT [--via cloudflared\|ngrok] [--detach]` | Share a runtime port at a public URL (keeps the runtime alive until Ctrl+C; `--list`, `--stop`) |
 
@@ -210,7 +211,7 @@ colab exec -s analysis -f report.ipynb --check --cells "Setup,4-6" --stop-on-err
   {"schema": "colab.v1", "type": "summary", "status": "error", "cells_run": 1, "cells_failed": 1, "exit_code": 1, ...}
   ```
 
-  Exit codes: 1 code error, 3 lost session, 4 timeout, 5 `--budget` reached (`run` keeps the script's own code). The summary's `cost` block estimates the compute units used; `--budget CU` (also on `colab job start`) stops a run before it costs more, and `colab usage --json` gives balance and rate. `COLAB_CLI_JSON=1` turns `--json` on everywhere; `--json-stream` also streams output events. See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
+  Exit codes: 1 code error, 3 lost session, 4 timeout, 5 `--budget` reached (`run` keeps the script's own code). A failure seen before carries `diagnosis.seen_before` with what fixed it last time (from the local history, see `colab history`). The summary's `cost` block estimates the compute units used; `--budget CU` (also on `colab job start`) stops a run before it costs more, and `colab usage --json` gives balance and rate. `COLAB_CLI_JSON=1` turns `--json` on everywhere; `--json-stream` also streams output events. See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
 * **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 
