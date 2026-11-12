@@ -65,3 +65,18 @@ def mock_common_state(mocker):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture(autouse=True)
+def default_ssh_key(tmp_path_factory, monkeypatch):
+    """Give `colab ssh`'s key pre-check a default key, whatever the host has.
+
+    tests/test_ssh_key_precheck.py replaces it to test the check itself.
+    """
+    from colab_cli.commands import ssh
+
+    ssh_dir = tmp_path_factory.mktemp("home") / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "id_ed25519.pub").write_text("ssh-ed25519 AAAATEST test@host\n")
+    monkeypatch.setattr(ssh, "_ssh_dir", lambda: ssh_dir)
+    return ssh_dir

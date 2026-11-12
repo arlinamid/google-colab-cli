@@ -409,11 +409,62 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
         candidate = ssh_dir / name
         if candidate.exists():
             return candidate.read_text().strip()
-    typer.echo(
+    typer.echo(_no_key_message(ssh_dir), err=True)
+    raise typer.Exit(code=2)
+
+
+def _ssh_dir() -> Path:
+    return Path(os.path.expanduser("~/.ssh"))
+
+
+def _no_key_message(ssh_dir: Path) -> str:
+    """Says no default key exists, naming other usable keys in ``ssh_dir``."""
+    message = (
         "[colab] no SSH public key found in ~/.ssh/. Run "
-        "`ssh-keygen -t ed25519` to generate one, or pass --identity.",
-        err=True,
+        "`ssh-keygen -t ed25519` to generate one, or pass --identity."
     )
+    others = []
+    with contextlib.suppress(OSError):
+        for pub in sorted(ssh_dir.glob("*.pub")):
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                # The server takes ed25519 and ECDSA keys, not RSA.
+                if pub.read_text().startswith(("ssh-ed25519", "ecdsa-")):
+                    others.append(pub)
+    if others:
+        names = ", ".join(f"~/.ssh/{p.name}" for p in others)
+        message += (
+            f" Found {names}: pass it with -i, for example "
+            f"`-i ~/.ssh/{others[0].stem}`."
+        )
+    return message
+
+
+def _require_ssh_key(identity: Optional[str]) -> None:
+    """Exits 2 when there is no key to send, before any runtime or ssh starts.
+
+    The ProxyCommand child reads the key (see _resolve_pubkey), so without
+    this check a missing key ended as ssh's exit 255, after an interactive
+    ``colab ssh`` had already created a runtime. Only checks that a file
+    exists; reading it, and any passphrase prompt, stay in the child.
+
+    Raises:
+      typer.Exit: If ``identity`` names no existing key file, or, without
+        ``identity``, no default key exists (exit code 2).
+    """
+    if identity:
+        expanded = Path(os.path.expanduser(identity))
+        if expanded.suffix == ".pub":
+            pair = (expanded, expanded.with_suffix(""))
+        else:
+            pair = (expanded, expanded.with_suffix(".pub"))
+        if any(p.exists() for p in pair):
+            return
+        typer.echo(f"[colab] SSH key not found: {identity}", err=True)
+        raise typer.Exit(code=2)
+    ssh_dir = _ssh_dir()
+    if any((ssh_dir / name).exists() for name in _KEY_TYPES):
+        return
+    typer.echo(_no_key_message(ssh_dir), err=True)
     raise typer.Exit(code=2)
 
 
@@ -1222,6 +1273,8 @@ def ssh(
             "~/.ssh/config instead.",
             err=True,
         )
+    if not proxy_mode:
+        _require_ssh_key(identity)
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
@@ -1279,6 +1332,7 @@ def forward(
     Only your machine can reach it. The runtime is kept alive meanwhile.
     """
     forwards = [_parse_forward(p) for p in ports]
+    _require_ssh_key(identity)
     s = _resolve_session(session)
     raise typer.Exit(
         code=_run_forward_only(s, identity, forwards, not no_keep_alive)
