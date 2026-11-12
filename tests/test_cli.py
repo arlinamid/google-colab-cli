@@ -898,3 +898,31 @@ def test_cli_file_errors_redact_tokens(
     assert result.exit_code == 1
     assert "boom" in result.output
     assert "LEAKED-TOKEN" not in result.output
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        click.ClickException("vim: Editing failed"),
+        click.UsageError("vim: Editing failed"),
+    ],
+)
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_edit_failing_editor_is_a_clean_error(
+    mock_contents_class, mock_store, mock_common_state, mocker, error
+):
+    """Typer vendors its own Click (typer._click), so a ClickException from
+    the real click package, raised by click.edit or _launch_editor, is not
+    handled by Typer and ended in a traceback."""
+    from colab_cli.commands import files
+
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch.object(files, "_launch_editor", side_effect=error)
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "remote.txt"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[colab] vim: Editing failed" in result.output
+    mock_contents_class.return_value.upload.assert_not_called()

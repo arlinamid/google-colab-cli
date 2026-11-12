@@ -205,7 +205,13 @@ def edit(
 
         hash_before = get_file_hash(local_path)
 
-        _launch_editor(local_path)
+        try:
+            _launch_editor(local_path)
+        except click.ClickException as e:
+            # Typer vendors its own Click and does not handle exceptions of
+            # the click package (raised here and by click.edit).
+            typer.echo(f"[colab] {e.format_message()}", err=True)
+            raise typer.Exit(1)
 
         hash_after = get_file_hash(local_path)
 
