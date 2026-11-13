@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Screenshot of the panel during the demo profile (`docs/images/tray_panel_training.png`, rendered by the tray's own `Panel` with live data). The demo (`examples/tray_demo_train.py`, `examples/profiles.example.toml`) ran on a real desktop: progress, epochs and the falling loss on the card, and `stop_when_done` stopped the runtime after the job. Cost estimates in the tray and in budgets now use the runtime's own rate (docs/08_agent_feedback.md, D).
 2026-11-13: The tray's own windows with help (`tray/windows.py`): a profile editor (list, a form whose fields follow the mode, file pickers, help for the focused field, validation that marks the field; saves through `profiles.py`, "Save and start", "Edit as text") and a log window (runs `colab job tail [-F]` or `colab log` with QProcess, Follow, Refresh, Copy; ANSI codes and progress-bar redraws are cleaned). Form logic without Qt: `tray/profile_form.py`. SSH stays in a terminal (interactive).
 2026-11-13: `colab profile edit` (opens profiles.toml in $VISUAL/$EDITOR, creating it with commented examples, then validates it); the panel's profile menu has "Edit profiles…" and, with no profiles, the main button creates one. Refresh and Settings are icons in the header (no duplicate rows). Terminal actions (Log, SSH, job tail, profile edit) run through `python -m colab_cli.tray.hold`, so the window waits for Enter instead of closing when the command ends (Windows).
 2026-11-13: Open port forwards are detected (`forwards.py`): the ssh processes that `colab forward` / `colab ssh -L` start (any tool, any CLI version) are found in the local process list, matched by session name and sessions file, and their local ports checked with a TCP connect. A runtime behind a forward is a service with an Open button. Live: the forward of a web UI (started by an older global `colab`) showed as a T4 service with `forward 8188`. Also fixed after the first try on a real desktop: sessions.json is read again on every refresh (a runtime created after the tray started was shown as an orphan), orphan cards have no actions, dialogs open on top of the panel.
@@ -168,6 +169,9 @@ a forwarded runtime is not warned about as idle (the forward keeps it alive).
 Whichever tool started the forward does not matter, nor its CLI version.
 
 ## 4. The panel (`tray/`, the `[tray]` extra)
+
+![The tray panel while the demo profile trains: epoch 2 of 5, the loss
+falling, the CPU runtime's rate and the balance](images/tray_panel_training.png)
 
 `uv tool install "google-colab-cli[tray] @ git+https://github.com/arlinamid/google-colab-cli"`
 adds PySide6-Essentials. Qt was chosen over pystray (a native menu cannot

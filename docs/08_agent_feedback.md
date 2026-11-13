@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Cost estimates use the runtime's own rate, not the account's. The account rate counts every runtime, so a 0.05 CU budget on a CPU next to a T4 (1.23 CU/h together) stopped after 2.4 minutes instead of about 37. `CostMeter` takes the account rate when the runtime is alone (and remembers it per accelerator in `settings.json` `cost_rates`, as the tray does), otherwise the learned rate, a default seen live (CPU 0.08, T4 1.12 CU/h) or the account rate minus the others'. The `cost` block names the basis (`rate_basis`) and keeps `account_rate_cu_per_hour`. Live: the demo profile (0.05 CU, CPU, alone) showed `only_runtime` at 0.08 CU/h and ran all 5 epochs.
 2026-11-13: Job records gain `cell`, `epoch`, `overall_percent` and `last_output_age_s`; `report(epoch=, epochs=)` / `report(step=, total=)` give the overall progress; notebooks run as background jobs (`colab job start -f nb.ipynb`, IPython driver with cell markers). Details and the tray that uses them: docs/09_tray_and_profiles.md.
 2026-11-12: `colab run --detach` implemented (the last open item of phase B). All five live scripts (`repro_agent_json`, `repro_job`, `repro_inspect_cost`, `repro_history`, `repro_gpu_feedback`) pass against the standalone binaries on Windows and Linux; `COLAB_CMD` / `COLAB_AUTH` select the build and auth. GPU: `inspect --gpu` on a T4, `cuda_oom` from a real oversized allocation, `no_gpu` from CUDA code on a CPU runtime.
 2026-11-12: Designed and implemented phase E: `experience.py` (grouping, fix detection, stats), `commands/history_cmd.py` (`colab history errors|stats`), `results.history_fields` (richer execution events) and `seen_before` in exec/run `--json` records. Change from the first draft: the signature leaves the location out (line numbers move with edits) and normalises only whole numbers in the message. Live: `integration/repro_history/test.sh` (fail on a missing package, install, succeed, uninstall, fail again: `seen_before.last_fix.steps == [{"install": ["tinydb"]}]`).
@@ -299,7 +300,9 @@ detection and that no values leak. Integration: create variables with
 
 - A `cost` block in every phase A `summary` and in `job status`:
   `{"accelerator", "rate_cu_per_hour", "used_cu", "balance_cu", "hours_left_at_rate"}`.
-  `used_cu` is `rate * duration`, labelled as an estimate.
+  `used_cu` is `rate * duration`, labelled as an estimate. `rate_cu_per_hour`
+  is the runtime's own rate; the block also carries `account_rate_cu_per_hour`
+  and `rate_basis` (see Source of numbers).
 - `colab usage --json` (balance, hourly rate, active assignments).
 - `--budget CU` on `exec`, `run` and `job start`/`wait`: stop (interrupt the
   cell, or `job stop`) once the estimate reaches the budget; exit code 5 and
@@ -313,6 +316,26 @@ detection and that no values leak. Integration: create variables with
 and `CcuInfo` already exist (`src/colab_cli/consumption.py`, used by
 `colab usage`). Read the rate once at start; read the balance at start and at
 the end. No extra polling.
+
+The API gives one hourly rate for the whole account. It is the runtime's own
+rate only when the runtime runs alone (`assignments == 1`). `CostMeter`
+therefore picks, in order (`rate_basis`):
+
+1. `only_runtime`: alone, the account rate; it is also remembered for the
+   accelerator in `settings.json` `cost_rates` (the tray does the same on
+   each refresh);
+2. `learned`: next to other runtimes, the rate remembered for this
+   accelerator;
+3. `default`: a rate seen on a live account (`cost.DEFAULT_RATES`: CPU,
+   accelerator `NONE`, 0.08; T4 1.12 CU/h);
+4. `account_minus_others`: the account rate minus the others' learned or
+   default rates, when all of them are known and something is left;
+5. `account`: the account rate, when nothing better is known (or the
+   assignment list could not be read).
+
+A budget converted with the account rate stopped far too early: 0.05 CU on a
+CPU next to a T4 (1.23 CU/h together) ended after 2.4 minutes instead of
+about 37.
 
 ### Tests
 

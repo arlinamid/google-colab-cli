@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: `colab.log` rotates at 10 MB (`common.LOG_MAX_BYTES`, two old files kept as `colab.log.1` and `.2`). A long-running `colab tray` had grown it to 200 MB. When Windows refuses the rename (another colab process has the file open), the rollover is skipped and logging goes on.
 2026-11-03: `colab stop --orphans [--yes]` lists and, after confirmation, unassigns server-side runtimes with no local session.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
