@@ -373,3 +373,14 @@ def test_update_if_present_updates_a_live_session(temp_config):
 
     assert store.update_if_present(_session(running=None)) is True
     assert store.get("s1").running is None
+
+
+def test_stores_create_their_directory_first(tmp_path):
+    """filelock opens the lock file in its constructor: the directory must exist before it."""
+    from colab_cli.state import Settings, SettingsStore, StateStore
+
+    settings = SettingsStore(str(tmp_path / "new" / "settings.json"))
+    settings.save(Settings(tray_language="hu"))
+    assert settings.load().tray_language == "hu"
+    sessions = StateStore(str(tmp_path / "other" / "deeper" / "sessions.json"))
+    assert sessions.list() == {}

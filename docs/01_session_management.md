@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: The session and settings stores create their directory before the lock: filelock opens the lock file in its constructor, so on a fresh machine (no `~/.config/colab-cli` yet, which the debug log used to create first) `settings.json.lock` failed with FileNotFoundError.
 2026-11-13: `setup_logging` replaces the handlers it added earlier in the same process instead of adding more (in the test run every line was written once per earlier command). Unit tests no longer write the user's `colab.log`: conftest's `isolate_colab_log` patches `cli.setup_logging`; tests of logging call `common.setup_logging` with a redirected home.
 2026-11-13: `colab.log` rotates at 10 MB (`common.LOG_MAX_BYTES`, two old files kept as `colab.log.1` and `.2`). A long-running `colab tray` had grown it to 200 MB. When Windows refuses the rename (another colab process has the file open), the rollover is skipped and logging goes on.
 2026-11-03: `colab stop --orphans [--yes]` lists and, after confirmation, unassigns server-side runtimes with no local session.

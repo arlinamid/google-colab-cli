@@ -99,6 +99,8 @@ class _LockedFileStore:
     def __init__(self, path: str):
         self.path = path
         self.lock_path = "%s.lock" % self.path
+        # Before the lock: filelock opens the lock file in its constructor.
+        self._ensure_dir()
         # ReadWriteLock gives us shared (concurrent) readers and exclusive
         # writers -- the cross-platform equivalent of fcntl LOCK_SH/LOCK_EX.
         # is_singleton=False keeps each store's lock independent: with the
@@ -107,7 +109,6 @@ class _LockedFileStore:
         # guard then raises RuntimeError when two threads contend for the write
         # lock. We want them to actually serialize via the underlying file lock.
         self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
-        self._ensure_dir()
         make_private(self.path)
 
     def _ensure_dir(self):
