@@ -133,3 +133,23 @@ def test_forward_line():
                  forwards=[{"local_port": 8188, "listening": True}, {"local_port": 7860, "listening": False}])
     assert a.card_lines(card, "hu")["detail"] == "továbbítás: 8188, 7860 (nem válaszol)"
     assert a.card_lines(card, "hu")["subtitle"] == "NVIDIA T4 · Szolgáltatás"
+
+
+def test_terminal_commands_wait_for_enter(mocker):
+    import sys
+
+    from colab_cli.tray import hold
+
+    argv = a.held(["colab", "log", "-s", "x"], "hu")
+    assert argv[:6] == [sys.executable, "-m", "colab_cli.tray.hold", "--lang", "hu", "--"]
+    assert argv[6:] == ["colab", "log", "-s", "x"]
+
+    call = mocker.patch.object(hold.subprocess, "call", return_value=3)
+    prompt = mocker.patch("builtins.input", return_value="")
+    assert hold.main(["--lang", "hu", "--", "colab", "log"]) == 3
+    call.assert_called_once_with(["colab", "log"])
+    assert "Entert" in prompt.call_args.args[0] and "3" in prompt.call_args.args[0]
+
+    call.side_effect = KeyboardInterrupt  # Ctrl+C ends a follow, not the window
+    assert hold.main(["--", "colab", "job", "tail"]) == 130
+    assert prompt.call_count == 2

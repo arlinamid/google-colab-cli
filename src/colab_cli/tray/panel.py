@@ -127,26 +127,6 @@ def _icon_label(name: str, color: str, size: int = 18) -> QLabel:
     return label
 
 
-class _Row(QPushButton):
-    """A list row: icon, text, and a chevron on the right."""
-
-    def __init__(self, icon_name: str):
-        super().__init__(objectName="row")
-        self.setMinimumHeight(40)
-        box = QHBoxLayout(self)
-        box.setContentsMargins(6, 0, 6, 0)
-        box.setSpacing(12)
-        box.addWidget(_icon_label(icon_name, TEXT, 20))
-        self.label = QLabel()
-        self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.label.setStyleSheet("background: transparent; font-size: 14px;")
-        box.addWidget(self.label, 1)
-        box.addWidget(_icon_label("chevron_right", MUTED, 16))
-
-    def set_text(self, text: str) -> None:
-        self.label.setText(text)
-
-
 class Panel(QWidget):
     """Signals carry what was clicked; ``card`` is a tray_model card dict."""
 
@@ -157,6 +137,7 @@ class Panel(QWidget):
     profile_clicked = Signal(str)
     refresh_clicked = Signal()
     settings_clicked = Signal()
+    edit_profiles_clicked = Signal()
     quit_clicked = Signal()
 
     def __init__(self):
@@ -197,11 +178,16 @@ class Panel(QWidget):
         status.addStretch()
         titles.addLayout(status)
         head.addLayout(titles, 1)
-        gear = QToolButton(objectName="gear")
-        gear.setIcon(glyph_icon("settings", TEXT, 22))
-        gear.setIconSize(QSize(22, 22))
-        gear.clicked.connect(self.settings_clicked)
-        head.addWidget(gear, 0, Qt.AlignTop)
+        self.refresh_button = QToolButton(objectName="gear")
+        self.refresh_button.setIcon(glyph_icon("refresh", TEXT, 20))
+        self.refresh_button.setIconSize(QSize(20, 20))
+        self.refresh_button.clicked.connect(self.refresh_clicked)
+        head.addWidget(self.refresh_button, 0, Qt.AlignTop)
+        self.gear = QToolButton(objectName="gear")
+        self.gear.setIcon(glyph_icon("settings", TEXT, 22))
+        self.gear.setIconSize(QSize(22, 22))
+        self.gear.clicked.connect(self.settings_clicked)
+        head.addWidget(self.gear, 0, Qt.AlignTop)
         self.body.addLayout(head)
 
         section = QHBoxLayout()
@@ -262,13 +248,6 @@ class Panel(QWidget):
         split.addWidget(self.profile_more)
         self.body.addLayout(split)
 
-        self.refresh_row = _Row("refresh")
-        self.refresh_row.clicked.connect(self.refresh_clicked)
-        self.settings_row = _Row("settings")
-        self.settings_row.clicked.connect(self.settings_clicked)
-        self.body.addWidget(self.refresh_row)
-        self.body.addWidget(self.settings_row)
-
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("color: #3c4043;")
@@ -291,6 +270,8 @@ class Panel(QWidget):
     def _start_main_profile(self):
         if self._main_profile:
             self.profile_clicked.emit(self._main_profile)
+        else:
+            self.edit_profiles_clicked.emit()
 
     # --- the view model ---
 
@@ -305,8 +286,8 @@ class Panel(QWidget):
         self._render_cards(view)
         self._render_cu(view)
         self._render_profiles(view)
-        self.refresh_row.set_text(t(lang, "refresh_now"))
-        self.settings_row.set_text(t(lang, "settings"))
+        self.refresh_button.setToolTip(t(lang, "refresh_now"))
+        self.gear.setToolTip(t(lang, "settings"))
         self.updated.setText(view["updated_text"])
         stale = view["status"] == "stale"
         self.updated_icon.setPixmap(glyph_pixmap("check", WARN if stale else MUTED, 18))
@@ -413,14 +394,16 @@ class Panel(QWidget):
         for name in names:
             action = self.profile_menu.addAction(name)
             action.triggered.connect(lambda _=False, n=name: self.profile_clicked.emit(n))
+        if names:
+            self.profile_menu.addSeparator()
+        edit = self.profile_menu.addAction(t(lang, "edit_profiles"))
+        edit.triggered.connect(self.edit_profiles_clicked)
         main = view.get("last_profile") if view.get("last_profile") in names else (names[0] if names else None)
         self._main_profile = main
         if main:
             self.profile_button.setText(f" {t(lang, 'start_profile')}: {main}")
         else:
-            self.profile_button.setText(t(lang, "no_profiles"))
-        self.profile_button.setEnabled(bool(main))
-        self.profile_more.setEnabled(bool(names))
+            self.profile_button.setText(f" {t(lang, 'create_profile')}")
 
     # --- behaviour ---
 

@@ -111,6 +111,7 @@ class TrayApp(QObject):
         self.panel.profile_clicked.connect(self.start_profile)
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
+        self.panel.edit_profiles_clicked.connect(lambda: self.in_terminal(["profile", "edit"]))
         self.panel.quit_clicked.connect(self.quit)
 
         self.timer = QTimer(self)
@@ -257,7 +258,7 @@ class TrayApp(QObject):
 
     def in_terminal(self, args):
         try:
-            cmd, kw = actions.terminal_command([*colab_argv(self.state), *args])
+            cmd, kw = actions.terminal_command(actions.held([*colab_argv(self.state), *args], self.lang))
             subprocess.Popen(cmd, **kw)
         except OSError as e:
             self.notify(str(e), QSystemTrayIcon.Warning)

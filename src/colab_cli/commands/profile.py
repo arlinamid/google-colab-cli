@@ -136,7 +136,7 @@ def add(
 ):
     """Add a profile: `colab profile add NAME OPTIONS -- SCRIPT ARGS...`.
 
-    For vars, ready URLs and other keys, edit profiles.toml (`colab profile path`).
+    For vars, ready URLs and other keys, use `colab profile edit`.
     """
     if not command:
         typer.echo("[colab] Give the script after --: colab profile add NAME -- SCRIPT [ARGS].", err=True)
@@ -174,6 +174,70 @@ def rm(name: Annotated[str, typer.Argument(help="Profile name.")]):
         typer.echo(f"[colab] No profile '{name}'.", err=True)
         raise typer.Exit(1)
     typer.echo(f"[colab] Removed profile '{name}'.")
+
+
+TEMPLATE = """# Colab CLI run profiles: `colab profile run NAME`, or the tray's Start profile.
+# One [table] per profile. Full reference: docs/09_tray_and_profiles.md.
+# Never put tokens here: `secrets` names entries set with `colab secret`.
+#
+# A script or notebook as a background job (progress in `colab job status`):
+# [train-t4]
+# script = "C:/work/train.py"          # .py or .ipynb; relative to this file
+# args = ["--epochs", "3"]
+# gpu = "T4"                           # or tpu = "V5E1"; neither: CPU
+# budget = 2.0                         # compute units; stops the job
+# secrets = ["HF_TOKEN"]
+# env = { WANDB_MODE = "offline" }
+# stop_when_done = true                # the tray stops the runtime afterwards
+# description = "Fine-tune on a T4"
+#
+# A server started in the kernel, forwarded to this computer:
+# [web-ui]
+# script = "C:/work/server.py"
+# mode = "kernel"
+# session = "web-ui"                   # reused while it is alive
+# gpu = "T4"
+# vars = { CONFIG = { access = "forward" } }   # Python globals set first
+# forward = [7860]
+# open = "http://127.0.0.1:7860"       # opened once it answers
+# stop_when_done = false
+"""
+
+
+def _launch_editor(path: str) -> None:
+    from colab_cli.commands.files import _launch_editor as launch
+
+    launch(path)
+
+
+@profile_app.command("edit")
+def edit():
+    """Open profiles.toml in your editor ($VISUAL / $EDITOR), then check it.
+
+    A missing file is created with commented examples.
+    """
+    import click
+
+    from colab_cli.state import make_private, private_opener
+
+    path = _path()
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n", opener=private_opener) as f:
+            f.write(TEMPLATE)
+        make_private(path)
+    try:
+        _launch_editor(path)
+    except click.ClickException as e:  # typer does not handle click's own (AGENTS.md 21)
+        typer.echo(f"[colab] {e.format_message()}", err=True)
+        raise typer.Exit(1)
+    try:
+        profiles = load_profiles(path)
+    except ProfileError as e:
+        typer.echo(f"[colab] {e}\n[colab] Fix it with `colab profile edit`.", err=True)
+        raise typer.Exit(2)
+    names = ", ".join(profiles) or "none"
+    typer.echo(f"[colab] {path}: {len(profiles)} profile(s): {names}")
 
 
 @profile_app.command("path")

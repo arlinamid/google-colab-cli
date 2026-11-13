@@ -235,3 +235,47 @@ def test_forward_profile_without_a_key_fails_before_a_runtime(profiles_file, cal
 
     assert result.exit_code == 2
     assert calls == []
+
+
+def test_edit_creates_a_template_and_checks_the_result(tmp_path, mock_common_state, mocker):
+    import tomllib
+
+    mock_common_state.config_path = str(tmp_path / "sessions.json")
+    path = tmp_path / "profiles.toml"
+    edited = []
+
+    def editor(p):
+        edited.append(p)
+        text = open(p, encoding="utf-8").read()
+        assert "# [train-t4]" in text and 'mode = "kernel"' in text  # commented examples
+        assert tomllib.loads(text) == {}  # only comments: valid and empty
+        with open(p, "a", encoding="utf-8") as f:
+            f.write('\n[mine]\nscript = "x.py"\n')
+
+    mocker.patch.object(profile_cmd, "_launch_editor", side_effect=editor)
+
+    result = runner.invoke(app, ["profile", "edit"])
+
+    assert result.exit_code == 0, result.output
+    assert edited == [str(path)]
+    assert "1 profile(s): mine" in result.output
+
+
+def test_edit_reports_a_broken_file(profiles_file, mocker):
+    def editor(p):
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("\n[bad]\nscript = 1\n")
+
+    mocker.patch.object(profile_cmd, "_launch_editor", side_effect=editor)
+    result = runner.invoke(app, ["profile", "edit"])
+    assert result.exit_code == 2
+    assert "'bad'" in result.output and "colab profile edit" in result.output
+
+
+def test_edit_with_a_failing_editor(profiles_file, mocker):
+    import click
+
+    mocker.patch.object(profile_cmd, "_launch_editor", side_effect=click.ClickException("vim: Editing failed"))
+    result = runner.invoke(app, ["profile", "edit"])
+    assert result.exit_code == 1
+    assert "vim: Editing failed" in result.output and "Traceback" not in result.output

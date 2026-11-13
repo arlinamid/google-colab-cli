@@ -178,7 +178,7 @@ def test_start_profile_after_confirmation(tray, tmp_path, mocker):
     confirm = mocker.patch.object(tray, "confirm", return_value=True)
     _render(tray, [])
     assert tray.panel.profile_button.text().endswith("train")
-    assert [a.text() for a in tray.panel.profile_menu.actions()] == ["train", "ui"]
+    assert [a.text() for a in tray.panel.profile_menu.actions()] == ["train", "ui", "", "Profilok szerkesztése…"]
 
     tray.start_profile("ui")
 
@@ -267,3 +267,29 @@ def test_a_forwarded_runtime_gets_an_open_button(tray, mocker):
     assert "továbbítás: 8188" in [w.text() for w in card.findChildren(QLabel)]
     tray.open_service(view["cards"][0]["card"])
     opened.assert_called_once_with("http://127.0.0.1:8188")
+
+
+def test_log_opens_a_terminal_that_stays_open(tray, mocker):
+    import sys
+
+    _render(tray, [_entry("webui", None)])
+    card = tray.view(now=NOW)["cards"][0]["card"]
+
+    tray.in_terminal(tray_app.actions.log_argv(card))
+
+    cmd = tray.popen.call_args.args[0]
+    assert sys.executable in cmd and "colab_cli.tray.hold" in cmd
+    assert cmd[-4:] == ["colab", "log", "-s", "webui"]
+
+
+def test_header_has_one_settings_and_a_refresh_icon_and_profiles_can_be_edited(tray):
+    _render(tray, [])
+    rows = [b for b in tray.panel.findChildren(QPushButton) if b.objectName() == "row"]
+    assert rows == []  # settings only behind the gear
+    assert tray.panel.refresh_button.toolTip() == "Frissítés most"
+    assert tray.panel.gear.toolTip() == "Beállítások"
+    # No profiles: the main button creates one in the editor.
+    assert tray.panel.profile_button.text().strip() == "Profil létrehozása…"
+    tray.panel.profile_button.click()
+    cmd = tray.popen.call_args.args[0]
+    assert cmd[-2:] == ["profile", "edit"] and "colab_cli.tray.hold" in cmd

@@ -114,6 +114,11 @@ def notification(event: Dict[str, Any], lang: str) -> str:
     return text
 
 
+def held(argv: List[str], lang: str) -> List[str]:
+    """``argv`` wrapped so its terminal window waits for Enter after it exits."""
+    return [sys.executable, "-m", "colab_cli.tray.hold", "--lang", lang, "--", *argv]
+
+
 def terminal_command(argv: List[str], system: Optional[str] = None,
                      which: Callable[[str], Optional[str]] = shutil.which) -> Tuple[List[str], Dict[str, Any]]:
     """How to run ``argv`` in a new terminal window: (command, Popen kwargs)."""

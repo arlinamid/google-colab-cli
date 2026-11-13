@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: `colab profile edit` (opens profiles.toml in $VISUAL/$EDITOR, creating it with commented examples, then validates it); the panel's profile menu has "Edit profiles…" and, with no profiles, the main button creates one. Refresh and Settings are icons in the header (no duplicate rows). Terminal actions (Log, SSH, job tail, profile edit) run through `python -m colab_cli.tray.hold`, so the window waits for Enter instead of closing when the command ends (Windows).
 2026-11-13: Open port forwards are detected (`forwards.py`): the ssh processes that `colab forward` / `colab ssh -L` start (any tool, any CLI version) are found in the local process list, matched by session name and sessions file, and their local ports checked with a TCP connect. A runtime behind a forward is a service with an Open button. Live: the forward of a web UI (started by an older global `colab`) showed as a T4 service with `forward 8188`. Also fixed after the first try on a real desktop: sessions.json is read again on every refresh (a runtime created after the tray started was shown as an orphan), orphan cards have no actions, dialogs open on top of the panel.
 2026-11-13: Initial design and implementation: progress over the whole run (`overall_percent`, epochs, notebook cells), notebooks as background jobs, `colab exec --var`, run profiles (`profiles.toml`, `colab profile`), the tray snapshot (`tray_model.py`, `colab tray --snapshot`) and the Qt tray panel (`colab tray`, the `[tray]` extra). Live: `integration/repro_tray_profiles/test.sh` (job profile with a snapshot while it runs and after, a notebook job with a `!` cell, a kernel profile that reuses the runtime and sets vars) and a kernel profile that forwards a web server (ready check through `colab forward`). The panel is checked offscreen in tests; on a real desktop it was not yet checked by a person.
 ---
@@ -66,7 +67,7 @@ a stall flag, the last output and a diagnosis. Added:
 
 `profiles.toml`, next to `sessions.json` (it follows `--config`), read with
 `tomllib`, written owner-only. `colab profile add` and `rm` rewrite the file
-(comments are lost); `colab profile path` prints it for hand editing.
+(comments are lost); `colab profile edit` opens it in `$VISUAL`/`$EDITOR` (created with commented examples when missing) and checks it afterwards; `colab profile path` prints its path.
 
 ```toml
 [train-t4]                       # mode = "job" (default)
