@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: `setup_logging` replaces the handlers it added earlier in the same process instead of adding more (in the test run every line was written once per earlier command). Unit tests no longer write the user's `colab.log`: conftest's `isolate_colab_log` patches `cli.setup_logging`; tests of logging call `common.setup_logging` with a redirected home.
 2026-11-13: `colab.log` rotates at 10 MB (`common.LOG_MAX_BYTES`, two old files kept as `colab.log.1` and `.2`). A long-running `colab tray` had grown it to 200 MB. When Windows refuses the rename (another colab process has the file open), the rollover is skipped and logging goes on.
 2026-11-03: `colab stop --orphans [--yes]` lists and, after confirmation, unassigns server-side runtimes with no local session.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.

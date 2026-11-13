@@ -262,6 +262,11 @@ def setup_logging(log_to_stderr: bool):
     requests_log.propagate = True
     # Its DEBUG output includes stdin replies to the kernel, such as passwords.
     logging.getLogger("jupyter_kernel_client").setLevel(logging.INFO)
+    # Called again in the same process (tests, embedding): replace our
+    # handlers instead of adding more, each of which wrote every line again.
+    for old in [h for h in logger.handlers if getattr(h, "_colab_cli", False)]:
+        logger.removeHandler(old)
+        old.close()
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
@@ -277,11 +282,13 @@ def setup_logging(log_to_stderr: bool):
     file_handler = _RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=2,
                                         encoding="utf-8", delay=True)
     file_handler.setFormatter(_RedactingFormatter(log_format))
+    file_handler._colab_cli = True
     logger.addHandler(file_handler)
 
     if log_to_stderr:
         stream_handler = logging.StreamHandler(sys.stderr)
         stream_handler.setFormatter(_RedactingFormatter(log_format))
+        stream_handler._colab_cli = True
         logger.addHandler(stream_handler)
 
 
