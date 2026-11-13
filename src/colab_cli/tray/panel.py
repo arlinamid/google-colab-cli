@@ -18,7 +18,7 @@ clicked; app.py does the work."""
 
 from typing import Any, Dict, List
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from colab_cli.tray.glyphs import icon as glyph_icon
+from colab_cli.tray.glyphs import pixmap as glyph_pixmap
 from colab_cli.tray.i18n import fmt_number, t
 from colab_cli.tray.icon import logo_pixmap
 
@@ -47,6 +49,7 @@ DOT = {
     "done": "#4285f4", "failed": "#ea4335", "stopped": "#9aa0a6",
 }
 STATUS_DOT = {"connected": "#34a853", "error": "#ea4335", "stale": "#f9ab00"}
+TEXT, MUTED, ORANGE, RED, WARN = "#e8eaed", "#9aa0a6", "#f9ab00", "#f28b82", "#fdd663"
 
 QSS = """
 #panel { background: #202124; border: 1px solid #3c4043; border-radius: 14px; }
@@ -99,6 +102,49 @@ def _dot(color: str, size: int = 10) -> QLabel:
     return dot
 
 
+def _metric_label(text: str, metric) -> QLabel:
+    """``loss 0,31 ↓`` with the arrow green when the metric moves the good way
+    (a loss or error going down, anything else going up), else orange."""
+    label = QLabel(objectName="metric")
+    trend = (metric or {}).get("trend")
+    if trend and text[-1] in "↓↑":
+        lower_is_better = any(k in metric["name"].lower() for k in ("loss", "err", "perplex", "wer"))
+        good = (trend == "down") == lower_is_better
+        color = "#34a853" if good else ORANGE
+        label.setText(f'{text[:-1]}<span style="color: {color}; font-weight: 700;">{text[-1]}</span>')
+    else:
+        label.setText(text)
+    return label
+
+
+def _icon_label(name: str, color: str, size: int = 18) -> QLabel:
+    label = QLabel()
+    label.setPixmap(glyph_pixmap(name, color, size))
+    label.setAttribute(Qt.WA_TransparentForMouseEvents)
+    label.setStyleSheet("background: transparent;")
+    return label
+
+
+class _Row(QPushButton):
+    """A list row: icon, text, and a chevron on the right."""
+
+    def __init__(self, icon_name: str):
+        super().__init__(objectName="row")
+        self.setMinimumHeight(40)
+        box = QHBoxLayout(self)
+        box.setContentsMargins(6, 0, 6, 0)
+        box.setSpacing(12)
+        box.addWidget(_icon_label(icon_name, TEXT, 20))
+        self.label = QLabel()
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.label.setStyleSheet("background: transparent; font-size: 14px;")
+        box.addWidget(self.label, 1)
+        box.addWidget(_icon_label("chevron_right", MUTED, 16))
+
+    def set_text(self, text: str) -> None:
+        self.label.setText(text)
+
+
 class Panel(QWidget):
     """Signals carry what was clicked; ``card`` is a tray_model card dict."""
 
@@ -149,7 +195,9 @@ class Panel(QWidget):
         status.addStretch()
         titles.addLayout(status)
         head.addLayout(titles, 1)
-        gear = QToolButton(objectName="gear", text="⚙")
+        gear = QToolButton(objectName="gear")
+        gear.setIcon(glyph_icon("settings", TEXT, 22))
+        gear.setIconSize(QSize(22, 22))
         gear.clicked.connect(self.settings_clicked)
         head.addWidget(gear, 0, Qt.AlignTop)
         self.body.addLayout(head)
@@ -174,6 +222,8 @@ class Panel(QWidget):
         self.cu_frame = QFrame(objectName="cu")
         cu = QVBoxLayout(self.cu_frame)
         row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(_icon_label("layers", ORANGE, 26), 0, Qt.AlignTop)
         left = QVBoxLayout()
         self.cu_title = _label("", "")
         self.cu_title.setStyleSheet("font-weight: 600; font-size: 14px;")
@@ -197,8 +247,12 @@ class Panel(QWidget):
         split = QHBoxLayout()
         split.setSpacing(0)
         self.profile_button = QPushButton(objectName="primary")
+        self.profile_button.setIcon(glyph_icon("plus", "#ffffff", 20))
+        self.profile_button.setIconSize(QSize(20, 20))
         self.profile_button.clicked.connect(self._start_main_profile)
-        self.profile_more = QToolButton(objectName="more", text="▾")
+        self.profile_more = QToolButton(objectName="more")
+        self.profile_more.setIcon(glyph_icon("chevron_down", "#ffffff", 20))
+        self.profile_more.setIconSize(QSize(20, 20))
         self.profile_more.setPopupMode(QToolButton.InstantPopup)
         self.profile_menu = QMenu(self)
         self.profile_more.setMenu(self.profile_menu)
@@ -206,9 +260,9 @@ class Panel(QWidget):
         split.addWidget(self.profile_more)
         self.body.addLayout(split)
 
-        self.refresh_row = QPushButton(objectName="row")
+        self.refresh_row = _Row("refresh")
         self.refresh_row.clicked.connect(self.refresh_clicked)
-        self.settings_row = QPushButton(objectName="row")
+        self.settings_row = _Row("settings")
         self.settings_row.clicked.connect(self.settings_clicked)
         self.body.addWidget(self.refresh_row)
         self.body.addWidget(self.settings_row)
@@ -218,8 +272,13 @@ class Panel(QWidget):
         line.setStyleSheet("color: #3c4043;")
         self.body.addWidget(line)
         foot = QHBoxLayout()
+        foot.setSpacing(8)
+        self.updated_icon = _icon_label("check", MUTED, 18)
+        foot.addWidget(self.updated_icon)
         self.updated = _label("", "muted")
         self.quit_button = QPushButton(objectName="flat")
+        self.quit_button.setIcon(glyph_icon("quit", "#bdc1c6", 18))
+        self.quit_button.setLayoutDirection(Qt.RightToLeft)
         self.quit_button.clicked.connect(self.quit_clicked)
         foot.addWidget(self.updated)
         foot.addStretch()
@@ -244,11 +303,13 @@ class Panel(QWidget):
         self._render_cards(view)
         self._render_cu(view)
         self._render_profiles(view)
-        self.refresh_row.setText("⟳   " + t(lang, "refresh_now"))
-        self.settings_row.setText("⚙   " + t(lang, "settings"))
+        self.refresh_row.set_text(t(lang, "refresh_now"))
+        self.settings_row.set_text(t(lang, "settings"))
         self.updated.setText(view["updated_text"])
+        stale = view["status"] == "stale"
+        self.updated_icon.setPixmap(glyph_pixmap("check", WARN if stale else MUTED, 18))
         self.updated.setStyleSheet("color: #fdd663;" if view["status"] == "stale" else "")
-        self.quit_button.setText(t(lang, "quit") + "  ⇥")
+        self.quit_button.setText(t(lang, "quit") + " ")
         self.adjustSize()
 
     def _render_cards(self, view):
@@ -286,7 +347,7 @@ class Panel(QWidget):
         names.addWidget(_label(lines["subtitle"], "muted"))
         top.addLayout(names, 1)
         if lines["metric"]:
-            top.addWidget(_label(lines["metric"], "metric"), 0, Qt.AlignTop)
+            top.addWidget(_metric_label(lines["metric"], card["metric"]), 0, Qt.AlignTop)
         box.addLayout(top)
         if card["percent"] is not None and card["state"] in ("running", "stalled"):
             bar_row = QHBoxLayout()
@@ -302,16 +363,19 @@ class Panel(QWidget):
         box.addWidget(detail)
         buttons = QHBoxLayout()
         enabled = card["local"]
-        for key, signal, obj in (("log", self.log_clicked, "action"), ("ssh", self.ssh_clicked, "action")):
-            b = QPushButton(t(lang, key), objectName=obj)
+        for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked)):
+            b = QPushButton(t(lang, key), objectName="action")
+            b.setIcon(glyph_icon(glyph, TEXT))
             b.setEnabled(enabled)
             b.clicked.connect(lambda _=False, c=card, s=signal: s.emit(c))
             buttons.addWidget(b)
         if item.get("open_url"):
             b = QPushButton(t(lang, "open"), objectName="action")
+            b.setIcon(glyph_icon("open", TEXT))
             b.clicked.connect(lambda _=False, c=card: self.open_clicked.emit(c))
             buttons.addWidget(b)
-        stop = QPushButton("■  " + t(lang, "stop"), objectName="danger")
+        stop = QPushButton(t(lang, "stop"), objectName="danger")
+        stop.setIcon(glyph_icon("stop", RED))
         stop.setProperty("session", card["name"])
         stop.clicked.connect(lambda _=False, c=card: self.stop_clicked.emit(c))
         buttons.addWidget(stop)
@@ -323,7 +387,7 @@ class Panel(QWidget):
         self.cu_frame.setVisible(cu is not None)
         if cu is None:
             return
-        self.cu_title.setText("◈  " + t(lang, "compute_units"))
+        self.cu_title.setText(t(lang, "compute_units"))
         self.cu_balance.setText(f"{t(lang, 'balance')} {fmt_number(cu['balance_cu'] or 0, lang)} CU")
         self.cu_usage_label.setText(t(lang, "usage"))
         self.cu_usage.setText(t(lang, "per_hour", rate=fmt_number(cu["rate_cu_per_hour"] or 0, lang)))
@@ -342,7 +406,7 @@ class Panel(QWidget):
         main = view.get("last_profile") if view.get("last_profile") in names else (names[0] if names else None)
         self._main_profile = main
         if main:
-            self.profile_button.setText(f"＋  {t(lang, 'start_profile')}: {main}")
+            self.profile_button.setText(f" {t(lang, 'start_profile')}: {main}")
         else:
             self.profile_button.setText(t(lang, "no_profiles"))
         self.profile_button.setEnabled(bool(main))

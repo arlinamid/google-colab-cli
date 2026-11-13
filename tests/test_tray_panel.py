@@ -22,13 +22,15 @@ from unittest.mock import MagicMock  # noqa: E402
 
 import pytest  # noqa: E402
 
-pytest.importorskip("PySide6")
+try:  # no PySide6, or no GL/xkb libraries for Qt on a bare Linux box
+    from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton
 
-from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton  # noqa: E402
+    from colab_cli.tray import app as tray_app
+    from colab_cli.tray.panel import CARD_HEIGHT, MAX_VISIBLE_CARDS
+except ImportError as e:
+    pytest.skip(f"Qt is not usable here: {e}", allow_module_level=True)
 
 from colab_cli.state import Settings  # noqa: E402
-from colab_cli.tray import app as tray_app  # noqa: E402
-from colab_cli.tray.panel import CARD_HEIGHT, MAX_VISIBLE_CARDS  # noqa: E402
 
 NOW = 1_000_000.0
 
@@ -88,11 +90,12 @@ def test_one_card_as_in_the_design(tray):
 
     assert len(tray.panel.cards) == 1
     texts = [w.text() for w in tray.panel.cards[0].findChildren(QLabel)]
-    assert "train-t4" in texts and "NVIDIA T4 · Fut" in texts and "loss 0,31 ↓" in texts
+    assert "train-t4" in texts and "NVIDIA T4 · Fut" in texts
+    assert any("loss 0,31" in x and "#34a853" in x for x in texts)
     assert "2 / 5 epoch · kb. 12 perc hátra" in texts
     assert tray.panel.cards[0].findChildren(QProgressBar)[0].value() == 450
     buttons = [b.text() for b in tray.panel.cards[0].findChildren(QPushButton)]
-    assert buttons == ["Napló", "SSH", "■  Leállítás"]
+    assert buttons == ["Napló", "SSH", "Leállítás"]
     assert tray.panel.count_badge.text() == "1 aktív"
     assert tray.panel.status_text.text() == "Kapcsolódva"
     assert "Becsült hátralévő idő" in tray.panel.cu_estimate.text()
@@ -179,7 +182,7 @@ def test_start_profile_after_confirmation(tray, tmp_path, mocker):
     # The running kernel profile is a service with an Open button.
     _render(tray, [_entry("ui", None, profile="ui")])
     assert [b.text() for b in tray.panel.cards[0].findChildren(QPushButton)] == [
-        "Napló", "SSH", "Megnyitás", "■  Leállítás"]
+        "Napló", "SSH", "Megnyitás", "Leállítás"]
 
 
 def test_declined_profile_does_not_start(tray, tmp_path, mocker):
