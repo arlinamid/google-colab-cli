@@ -35,6 +35,7 @@ from colab_cli.commands import (
     inspect,
     job,
     profile,
+    tray,
     run,
     secret,
     share,
@@ -177,6 +178,7 @@ history_cmd.register(app)
 inspect.register(app)
 job.register(app)
 profile.register(app)
+tray.register(app)
 run.register(app)
 secret.register(app)
 share.register(app)
