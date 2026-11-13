@@ -146,3 +146,14 @@ def test_detach_starts_itself_in_the_background(mocker, mock_common_state):
         assert kw["creationflags"]
     else:
         assert kw["start_new_session"] is True
+
+
+def test_snapshot_warns_with_the_tray_settings(snap, mock_common_state):
+    from colab_cli.state import Settings
+
+    mock_common_state.settings_store.load.return_value = Settings(tray_low_balance_hours=100)
+
+    rec = json.loads(runner.invoke(app, ["tray", "--snapshot", "--json"]).stdout)
+
+    assert rec["icon"]["level"] == "warning"  # about 46 hours left, under 100
+    assert "low balance" in runner.invoke(app, ["tray", "--snapshot"]).output

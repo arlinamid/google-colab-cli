@@ -165,3 +165,26 @@ def test_starting_card_says_what_happens_and_for_how_long():
     assert lines["detail"] == "Gép foglalása (1–3 perc)… · 42 mp telt el"
     card.update(phase="setup", setup_line="Telepítés kész.", elapsed_s=200)
     assert a.card_lines(card, "en")["detail"] == "Running the script… · 3 min elapsed · › Telepítés kész."
+
+
+def test_a_chosen_terminal_runs_the_command():
+    argv = ["colab", "log", "-s", "a b"]
+    cmd, kw = a.terminal_command(argv, system="linux", custom="alacritty -e {cmd}")
+    assert cmd == ["alacritty", "-e", "colab", "log", "-s", "a b"] and kw == {"start_new_session": True}
+    # Without {cmd} the command goes last; inside a word it is one shell line.
+    assert a.terminal_command(argv, system="linux", custom="kitty")[0] == ["kitty", *argv]
+    assert a.terminal_command(argv, system="linux", custom='sh -c "{cmd}; read"')[0] == [
+        "sh", "-c", "colab log -s 'a b'; read"]
+    win = [r"C:\Program Files\py\python.exe", "-m", "colab_cli", "ssh"]
+    cmd, kw = a.terminal_command(win, system="win32", custom=r'"C:\Tools\wt.exe" -w new {cmd}')
+    assert cmd == [r"C:\Tools\wt.exe", "-w", "new", *win] and "creationflags" in kw
+    # Empty means automatic, as before.
+    assert a.terminal_command(argv, system="linux", which=lambda n: "/usr/bin/xterm" if n == "xterm" else None,
+                              custom="")[0] == ["/usr/bin/xterm", "-e", *argv]
+
+
+def test_terminal_presets_per_platform():
+    assert ("Windows Terminal", "wt -w new {cmd}") in a.terminal_presets("win32")
+    linux = dict(a.terminal_presets("linux"))
+    assert linux["GNOME Terminal"] == "gnome-terminal -- {cmd}" and "Konsole" in linux
+    assert all("{cmd}" in tpl for _, tpl in a.terminal_presets("linux") + a.terminal_presets("darwin"))

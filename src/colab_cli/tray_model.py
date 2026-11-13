@@ -379,12 +379,15 @@ def _idle_for(entry: Dict[str, Any], card: Dict[str, Any], now: float) -> Option
     return now - last if last else None
 
 
-def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Optional[Set[str]] = None) -> Dict[str, Any]:
+def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Optional[Set[str]] = None,
+               low_balance_hours: float = LOW_BALANCE_HOURS, idle_warn_sec: float = IDLE_WARN_SEC) -> Dict[str, Any]:
     """The tray icon's level, colour and a text that says the same in words.
 
     Levels, worst first: stale (no successful refresh for two intervals),
-    error (refresh failed, failed job), warning (stalled job, low balance,
-    a runtime idle for long), running, idle, none.
+    error (refresh failed, failed job), warning (stalled job, the balance
+    lasting less than ``low_balance_hours`` at the current rate, a runtime
+    idle for more than ``idle_warn_sec``), running, idle, none. Both limits
+    are tray settings.
     """
     cards = [card_model(e, now, services) for e in snap.get("sessions", [])]
     reasons: List[str] = []
@@ -401,10 +404,10 @@ def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Opti
         failed = [c for c in cards if c["state"] == "failed"]
         stalled = [c for c in cards if c["state"] == "stalled"]
         cu = cu_model(snap.get("account"))
-        low = cu and cu["hours_left"] is not None and cu["hours_left"] < LOW_BALANCE_HOURS
+        low = cu and cu["hours_left"] is not None and cu["hours_left"] < low_balance_hours
         idle_long = [
             e["name"] for e, c in zip(snap.get("sessions", []), cards)
-            if (_idle_for(e, c, now) or 0) > IDLE_WARN_SEC
+            if (_idle_for(e, c, now) or 0) > idle_warn_sec
         ]
         if failed:
             level = "error"
@@ -443,7 +446,8 @@ def summary_text(cards: List[Dict[str, Any]]) -> str:
     return f"{len(cards)} runtime(s): " + ", ".join(parts)
 
 
-def events(prev: Optional[Dict[str, Any]], cur: Dict[str, Any]) -> List[Dict[str, Any]]:
+def events(prev: Optional[Dict[str, Any]], cur: Dict[str, Any],
+           low_balance_hours: float = LOW_BALANCE_HOURS) -> List[Dict[str, Any]]:
     """What changed between two snapshots that deserves a notification."""
     if not prev or not cur.get("ok"):
         return []
@@ -467,8 +471,8 @@ def events(prev: Optional[Dict[str, Any]], cur: Dict[str, Any]) -> List[Dict[str
         if endpoint not in cur_by and e["local"]:
             out.append({"kind": "session_gone", "session": e["name"], "job": None, "code": None})
     old_cu, new_cu = cu_model(prev.get("account")), cu_model(cur.get("account"))
-    if (new_cu and new_cu["hours_left"] is not None and new_cu["hours_left"] < LOW_BALANCE_HOURS
-            and not (old_cu and old_cu["hours_left"] is not None and old_cu["hours_left"] < LOW_BALANCE_HOURS)):
+    if (new_cu and new_cu["hours_left"] is not None and new_cu["hours_left"] < low_balance_hours
+            and not (old_cu and old_cu["hours_left"] is not None and old_cu["hours_left"] < low_balance_hours)):
         out.append({"kind": "low_balance", "session": None, "job": None, "code": None})
     return out
 

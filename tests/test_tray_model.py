@@ -381,3 +381,20 @@ def test_a_new_runtime_is_watched_for_its_first_job(world):
     idle_later = tm.collect_snapshot(world.state, prev=first, now=NOW + tm.NEW_RUNTIME_WATCH_SEC + 1)
     assert tm.NEW_RUNTIME_WATCH_SEC <= 180 < tm.IDLE_RECHECK_SEC
     assert idle_later["sessions"][1]["first_seen_at"] == NOW
+
+
+def test_warning_thresholds_follow_the_settings():
+    idle = _card_entry("idle-cpu", last_execution_at=NOW - 40 * 60)
+    snap = {"ok": True, "last_ok_at": NOW, "sessions": [idle],
+            "account": {"balance_cu": 3.0, "rate_cu_per_hour": 1.0, "assignments": 1, "fetched_at": NOW}}
+
+    default = tm.icon_state(snap, NOW, 30)
+    assert default["level"] == "idle"  # 3 h left and 40 min idle: below the defaults (1 h, 75 min)
+
+    strict = tm.icon_state(snap, NOW, 30, low_balance_hours=5, idle_warn_sec=30 * 60)
+    assert strict["level"] == "warning"
+    assert {r["code"] for r in strict["reasons"]} == {"low_balance", "idle_long"}
+
+    richer = {**snap, "account": {**snap["account"], "balance_cu": 6.0}}
+    assert tm.events(richer, snap) == []
+    assert [e["kind"] for e in tm.events(richer, snap, low_balance_hours=4)] == ["low_balance"]

@@ -64,6 +64,15 @@ class Settings(BaseModel):
     tray_notifications: bool = True
     tray_language: str = "auto"
     tray_last_profile: Optional[str] = None
+    # Warn when the balance lasts less than this many hours at the current
+    # rate, or a runtime has been idle this many minutes (Colab reclaims
+    # idle runtimes at about 90).
+    tray_low_balance_hours: float = 1.0
+    tray_idle_warn_minutes: float = 75.0
+    # Ask before a profile starts (it names the hardware and the rate).
+    tray_confirm_start: bool = True
+    # Terminal for Log/SSH: "" is automatic, else a command with {cmd}.
+    tray_terminal: str = ""
     # Hourly compute-unit rate per accelerator ("NONE", "T4", ...), learned
     # whenever a runtime was the only one (cost.py), for per-runtime budgets.
     cost_rates: Dict[str, float] = {}

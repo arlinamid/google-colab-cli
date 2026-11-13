@@ -127,10 +127,60 @@ def held(argv: List[str], lang: str) -> List[str]:
     return [sys.executable, "-m", "colab_cli.tray.hold", "--lang", lang, "--", *argv]
 
 
-def terminal_command(argv: List[str], system: Optional[str] = None,
-                     which: Callable[[str], Optional[str]] = shutil.which) -> Tuple[List[str], Dict[str, Any]]:
-    """How to run ``argv`` in a new terminal window: (command, Popen kwargs)."""
+# Terminals offered in the settings ("{cmd}" is the command to run). Any
+# other command can be typed there; empty is automatic.
+TERMINAL_PRESETS = {
+    "win32": [("Windows Terminal", "wt -w new {cmd}")],
+    "darwin": [],
+    "linux": [
+        ("GNOME Terminal", "gnome-terminal -- {cmd}"), ("Konsole", "konsole -e {cmd}"),
+        ("Xfce Terminal", "xfce4-terminal -x {cmd}"), ("kitty", "kitty {cmd}"),
+        ("Alacritty", "alacritty -e {cmd}"), ("xterm", "xterm -e {cmd}"),
+    ],
+}
+
+
+def terminal_presets(system: Optional[str] = None) -> List[Tuple[str, str]]:
     system = system or sys.platform
+    return list(TERMINAL_PRESETS.get("linux" if system.startswith("linux") else system, []))
+
+
+def _split_template(template: str, system: str) -> List[str]:
+    if system != "win32":
+        return shlex.split(template)
+    # Windows paths have backslashes: split without POSIX escapes, drop the quotes.
+    parts = shlex.split(template, posix=False)
+    return [p[1:-1] if len(p) >= 2 and p[0] == p[-1] == '"' else p for p in parts]
+
+
+def terminal_command(argv: List[str], system: Optional[str] = None,
+                     which: Callable[[str], Optional[str]] = shutil.which,
+                     custom: Optional[str] = None) -> Tuple[List[str], Dict[str, Any]]:
+    """How to run ``argv`` in a new terminal window: (command, Popen kwargs).
+
+    ``custom`` is the terminal chosen in the settings: a command where
+    ``{cmd}`` stands for ``argv`` (a word of its own: the arguments; inside a
+    word: one quoted command line); without ``{cmd}``, ``argv`` goes last.
+    """
+    system = system or sys.platform
+    if custom and custom.strip():
+        line = subprocess.list2cmdline(argv) if system == "win32" else shlex.join(argv)
+        cmd: List[str] = []
+        placed = False
+        for part in _split_template(custom, system):
+            if part == "{cmd}":
+                cmd += argv
+                placed = True
+            elif "{cmd}" in part:
+                cmd.append(part.replace("{cmd}", line))
+                placed = True
+            else:
+                cmd.append(part)
+        if not placed:
+            cmd += argv
+        if system == "win32":
+            return cmd, {"creationflags": getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10)}
+        return cmd, {"start_new_session": True}
     if system == "win32":
         return list(argv), {"creationflags": getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10)}
     line = shlex.join(argv)

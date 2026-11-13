@@ -419,3 +419,48 @@ def test_settings_start_the_tray_with_the_computer(tray, mocker):
     tray.open_settings()
     assert seen["checked"] is True and disable.called
     assert "denied" in tray.notify.call_args.args[0]
+
+
+def test_more_settings_are_saved_and_used(tray, tmp_path, mocker):
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox
+
+    from colab_cli.tray import autostart
+
+    mocker.patch.object(autostart, "status", return_value=None)
+    mocker.patch.object(autostart, "enable")
+    seen = {}
+
+    def change(dialog):
+        low = dialog.findChild(QDoubleSpinBox, "low_balance")
+        idle = dialog.findChild(QDoubleSpinBox, "idle_warn")
+        confirm = dialog.findChild(QCheckBox, "confirm_start")
+        terminal = dialog.findChild(QComboBox, "terminal")
+        seen.update(low=low.value(), idle=idle.value(), confirm=confirm.isChecked(), terminal=terminal.currentText())
+        low.setValue(100)
+        idle.setValue(30)
+        confirm.setChecked(False)
+        terminal.setEditText("xterm -e {cmd}")
+        return QDialog.Accepted
+
+    mocker.patch.object(QDialog, "exec", change)
+    tray.open_settings()
+
+    assert seen == {"low": 1.0, "idle": 75.0, "confirm": True, "terminal": "Automatikus"}
+    s = tray.settings
+    assert (s.tray_low_balance_hours, s.tray_idle_warn_minutes, s.tray_confirm_start, s.tray_terminal) == (
+        100.0, 30.0, False, "xterm -e {cmd}")
+
+    # 87 CU at 1.9 CU/h is about 46 hours: under the new 100-hour threshold.
+    tray.snapshot = _snap([_entry("t", _job())])
+    assert tray.view(now=NOW)["icon"]["level"] == "warning"
+
+    # The terminal of choice opens Log and SSH.
+    tray.in_terminal(["log", "-s", "t"])
+    assert tray.popen.call_args.args[0][:2] == ["xterm", "-e"]
+
+    # No question before a profile starts.
+    (tmp_path / "profiles.toml").write_text('[train]\nscript = "t.py"\n', encoding="utf-8")
+    confirm = mocker.patch.object(tray, "confirm", return_value=False)
+    tray.start_profile("train")
+    confirm.assert_not_called()
+    assert tray.popen.call_args.args[0] == ["colab", "profile", "run", "train"]

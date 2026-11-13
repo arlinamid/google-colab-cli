@@ -163,7 +163,7 @@ class TrayApp(QObject):
         prev, self.snapshot = self.snapshot, snap
         self._reap_children()
         if self.settings.tray_notifications:
-            for event in events(prev, snap):
+            for event in events(prev, snap, low_balance_hours=self.settings.tray_low_balance_hours):
                 self.notify(actions.notification(event, self.lang),
                             QSystemTrayIcon.Critical if event["kind"] in ("job_failed", "session_gone")
                             else QSystemTrayIcon.Information)
@@ -209,7 +209,9 @@ class TrayApp(QObject):
         now = time.time() if now is None else now
         snap = self.snapshot or {"sessions": [], "ok": True, "account": None, "last_ok_at": None}
         services = self.services()
-        icon = icon_state(snap, now=now, interval=self.interval, services=services)
+        icon = icon_state(snap, now=now, interval=self.interval, services=services,
+                          low_balance_hours=self.settings.tray_low_balance_hours,
+                          idle_warn_sec=self.settings.tray_idle_warn_minutes * 60)
         starts = self.starts()
         cards = merge_starts([card_model(e, now, services) for e in snap.get("sessions", [])], starts, now)
         self._load_profiles()
@@ -302,7 +304,8 @@ class TrayApp(QObject):
 
     def in_terminal(self, args):
         try:
-            cmd, kw = actions.terminal_command(actions.held([*colab_argv(self.state), *args], self.lang))
+            cmd, kw = actions.terminal_command(actions.held([*colab_argv(self.state), *args], self.lang),
+                                               custom=self.settings.tray_terminal)
             subprocess.Popen(cmd, **kw)
         except OSError as e:
             self.notify(str(e), QSystemTrayIcon.Warning)
@@ -435,7 +438,7 @@ class TrayApp(QObject):
         if p is None:
             return
         rate = (cu_model((self.snapshot or {}).get("account")) or {}).get("rate_cu_per_hour")
-        if not self.confirm(*actions.profile_confirm(name, p, rate, self.lang)):
+        if self.settings.tray_confirm_start and not self.confirm(*actions.profile_confirm(name, p, rate, self.lang)):
             return
         log = os.path.join(self.log_dir, f"{name}.log")
         try:  # the log is appended to: this run's lines start here
@@ -478,6 +481,30 @@ class TrayApp(QObject):
         login = QCheckBox(t(self.lang, "settings.autostart"), objectName="autostart", checked=started_at_login)
         login.setToolTip(t(self.lang, "settings.autostart_help"))
         form.addRow("", login)
+        confirm = QCheckBox(t(self.lang, "settings.confirm_start"), objectName="confirm_start",
+                            checked=self.settings.tray_confirm_start)
+        confirm.setToolTip(t(self.lang, "settings.confirm_start_help"))
+        form.addRow("", confirm)
+        low = QDoubleSpinBox(objectName="low_balance", minimum=0, maximum=1000, decimals=1,
+                             value=self.settings.tray_low_balance_hours)
+        low.setSuffix(" " + t(self.lang, "settings.hours_unit"))
+        low.setToolTip(t(self.lang, "settings.low_balance_help"))
+        form.addRow(t(self.lang, "settings.low_balance"), low)
+        idle = QDoubleSpinBox(objectName="idle_warn", minimum=5, maximum=600, decimals=0,
+                              value=self.settings.tray_idle_warn_minutes)
+        idle.setSuffix(" " + t(self.lang, "settings.minutes_unit"))
+        idle.setToolTip(t(self.lang, "settings.idle_warn_help"))
+        form.addRow(t(self.lang, "settings.idle_warn"), idle)
+        terminal = QComboBox(objectName="terminal", editable=True)
+        auto_label = t(self.lang, "settings.terminal_auto")
+        terminal.addItem(auto_label)
+        for label, template in actions.terminal_presets():
+            terminal.addItem(template)
+            terminal.setItemData(terminal.count() - 1, label, Qt.ToolTipRole)
+        if self.settings.tray_terminal:
+            terminal.setEditText(self.settings.tray_terminal)
+        terminal.setToolTip(t(self.lang, "settings.terminal_help"))
+        form.addRow(t(self.lang, "settings.terminal"), terminal)
         buttons = QDialogButtonBox()
         buttons.addButton(QPushButton(t(self.lang, "save")), QDialogButtonBox.AcceptRole)
         buttons.addButton(QPushButton(t(self.lang, "cancel")), QDialogButtonBox.RejectRole)
@@ -489,6 +516,11 @@ class TrayApp(QObject):
         self.settings.tray_interval = interval.value()
         self.settings.tray_notifications = notifications.isChecked()
         self.settings.tray_language = language.currentData()
+        self.settings.tray_confirm_start = confirm.isChecked()
+        self.settings.tray_low_balance_hours = low.value()
+        self.settings.tray_idle_warn_minutes = idle.value()
+        text = terminal.currentText().strip()
+        self.settings.tray_terminal = "" if text in ("", auto_label) else text
         self.settings_store.save(self.settings)
         try:  # kept by the operating system, not settings.json (tray/autostart.py)
             if login.isChecked():

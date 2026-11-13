@@ -69,8 +69,20 @@ def _load_gui():
     return run_tray
 
 
-def _print_snapshot(snap, now: float, interval: float) -> None:
-    icon = icon_state(snap, now=now, interval=interval)
+def _warn_limits(state) -> dict:
+    """The tray's warning limits from settings.json (the defaults if unreadable)."""
+    try:
+        settings = state.settings_store.load()
+        hours, minutes = settings.tray_low_balance_hours, settings.tray_idle_warn_minutes
+    except Exception:
+        return {}
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (hours, minutes)):
+        return {}
+    return {"low_balance_hours": hours, "idle_warn_sec": minutes * 60}
+
+
+def _print_snapshot(snap, now: float, interval: float, limits: dict) -> None:
+    icon = icon_state(snap, now=now, interval=interval, **limits)
     typer.echo(f"[{icon['level']}] {icon['text']}")
     for entry in snap.get("sessions", []):
         c = card_model(entry, now)
@@ -149,15 +161,16 @@ def tray(
     if snapshot:
         now = time.time()
         snap = collect_snapshot(state, now=now)
+        limits = _warn_limits(state)
         if json_output:
             JsonEmitter(sys.stdout).emit({
                 **snap,
-                "icon": icon_state(snap, now=now, interval=interval),
+                "icon": icon_state(snap, now=now, interval=interval, **limits),
                 "cards": [card_model(e, now) for e in snap.get("sessions", [])],
                 "cu": cu_model(snap.get("account")),
             })
         else:
-            _print_snapshot(snap, now, interval)
+            _print_snapshot(snap, now, interval, limits)
         raise typer.Exit(0 if snap["ok"] else 1)
 
     problem = _gui_problem()
