@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Start with the computer (`tray/autostart.py`, no Qt): per user and without administrator rights, a value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (run with `pythonw.exe` next to `python.exe`, so no console window opens at sign-in), a LaunchAgent with `RunAtLoad` on macOS, an XDG autostart `.desktop` entry on Linux. The operating system keeps the setting (nothing in settings.json). A checkbox in the tray's settings (saving it again rewrites the command, e.g. after the install moved) and `colab tray --autostart on|off|status`. Live on Windows: `status` read the Run key and the command that would be written uses the venv's pythonw.exe; writing the Run key was left to the user (the agent's sandbox refuses persistent startup entries).
 2026-11-13: Feedback while a profile starts. Creating a runtime takes 1–3 minutes and the panel showed nothing until it existed, so a GPU profile was clicked twice: two T4s, the first left as an orphan. Now a click is answered at once (a notification and a "Starting" card with a moving bar, the phase and the time so far: launching, getting a runtime, running the script, waiting for the service; the phase comes from the run's own lines in `tray-logs/NAME.log`, read from where this run starts). A kernel profile's runtime card says its script is still setting up, with the script's newest line. A profile cannot be started again while its run is alive (menu entry and main button disabled, a second click only notifies), and the tray refreshes every 10 s while a runtime is being created. `colab profile run` prints `Script finished on 'S'.` after a kernel script. Also: a runtime seen before its first job started (a profile's runtime is saved before its job) was looked at again only after IDLE_RECHECK_SEC (5 minutes); a new runtime is now watched on every refresh for its first NEW_RUNTIME_WATCH_SEC (3 minutes). Live (demo profile, CPU, through `TrayApp.start_profile`): the card appeared after 1 s, the second click started nothing, and the job's card showed "Running" 14 s after the click (before: idle for over 4 minutes).
 2026-11-13: Screenshot of the panel during the demo profile (`docs/images/tray_panel_training.png`, rendered by the tray's own `Panel` with live data). The demo (`examples/tray_demo_train.py`, `examples/profiles.example.toml`) ran on a real desktop: progress, epochs and the falling loss on the card, and `stop_when_done` stopped the runtime after the job. Cost estimates in the tray and in budgets now use the runtime's own rate (docs/08_agent_feedback.md, D).
 2026-11-13: The tray's own windows with help (`tray/windows.py`): a profile editor (list, a form whose fields follow the mode, file pickers, help for the focused field, validation that marks the field; saves through `profiles.py`, "Save and start", "Edit as text") and a log window (runs `colab job tail [-F]` or `colab log` with QProcess, Follow, Refresh, Copy; ANSI codes and progress-bar redraws are cleaned). Form logic without Qt: `tray/profile_form.py`. SSH stays in a terminal (interactive).
@@ -198,6 +199,15 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
   without the extra (exit 2 with the install command); one instance per
   config directory (`tray.lock`); `--detach` restarts itself without a
   console window.
+- `colab tray --autostart on|off|status`: start the tray when the user signs
+  in, stop doing so, or show the command that runs then; exits without the
+  GUI. `tray/autostart.py` keeps it where the operating system looks, per
+  user, no administrator rights: Windows `HKCU\Software\Microsoft\Windows  CurrentVersion\Run\Colab CLI tray` (python.exe becomes pythonw.exe so no
+  console window stays open; the standalone binary is used as it is),
+  macOS `~/Library/LaunchAgents/com.github.arlinamid.colab-cli.tray.plist`
+  (`RunAtLoad`), Linux `$XDG_CONFIG_HOME/autostart/colab-cli-tray.desktop`
+  (default `~/.config`). The command is `colab_argv()` plus `tray`, so the
+  global options in use carry over; the tray's lock keeps a second copy out.
 - `app.py`: a `QTimer` starts `collect_snapshot` on a `QThreadPool` worker
   (the only thread that uses the CLI state); the result arrives as a signal.
   The icon (`icon.py`) is the Colab logo with a coloured dot; the tooltip says
@@ -242,7 +252,9 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
 - Notifications follow `events()`; `stop_when_done` runtimes are stopped
   once (`colab stop`), with a notification.
 - Settings (`settings.json`): refresh interval, notifications, language
-  (system, Hungarian, English). The panel's texts are in `i18n.py`; the CLI
+  (system, Hungarian, English); and **Start with the computer**, which the
+  operating system keeps (see `--autostart`): saving with it on writes the
+  command again, so a moved install is picked up; an error is notified. The panel's texts are in `i18n.py`; the CLI
   stays English.
 - The Colab logo (`tray/colab.svg`) comes from homarr-labs/dashboard-icons
   (Apache-2.0); the logo is a trademark of Google.

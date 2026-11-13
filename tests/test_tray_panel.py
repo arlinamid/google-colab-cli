@@ -380,3 +380,42 @@ def test_a_kernel_profile_shows_its_setup_and_refreshes_sooner(tray, tmp_path, m
     texts = [w.text() for w in tray.panel.cards[0].findChildren(QLabel)]
     assert "NVIDIA T4 · Szolgáltatás" in texts
     assert "ui" in tray.panel.profile_button.text() and "fut" in tray.panel.profile_button.text()
+
+
+def test_settings_start_the_tray_with_the_computer(tray, mocker):
+    from PySide6.QtWidgets import QCheckBox, QDialog
+
+    from colab_cli.tray import autostart
+
+    mocker.patch.object(autostart, "status", return_value=None)
+    enable = mocker.patch.object(autostart, "enable", return_value="HKCU-Run")
+    disable = mocker.patch.object(autostart, "disable", return_value=True)
+    seen = {}
+
+    def tick(dialog):
+        box = dialog.findChild(QCheckBox, "autostart")
+        seen["text"], seen["checked"] = box.text(), box.isChecked()
+        box.setChecked(True)
+        return QDialog.Accepted
+
+    mocker.patch.object(QDialog, "exec", tick)
+    tray.open_settings()
+
+    assert seen == {"text": "Indítás a számítógéppel", "checked": False}
+    enable.assert_called_once_with(["colab", "tray"])
+    disable.assert_not_called()
+
+    # Shown as on; turning it off removes it; an error is told, not raised.
+    autostart.status.return_value = "colab tray"
+
+    def untick(dialog):
+        box = dialog.findChild(QCheckBox, "autostart")
+        seen["checked"] = box.isChecked()
+        box.setChecked(False)
+        return QDialog.Accepted
+
+    mocker.patch.object(QDialog, "exec", untick)
+    disable.side_effect = OSError("denied")
+    tray.open_settings()
+    assert seen["checked"] is True and disable.called
+    assert "denied" in tray.notify.call_args.args[0]

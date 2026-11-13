@@ -96,6 +96,29 @@ def _print_snapshot(snap, now: float, interval: float) -> None:
         typer.echo(f"  balance {cu['balance_cu']:.1f} CU, {cu['rate_cu_per_hour']:g} CU/h{left}")
 
 
+def _autostart(choice: str) -> int:
+    from colab_cli.tray import autostart
+
+    if choice not in ("on", "off", "status"):
+        typer.echo(f"[colab] --autostart takes on, off or status, not {choice!r}.", err=True)
+        return 2
+    try:
+        if choice == "on":
+            where = autostart.enable([*colab_argv(), "tray"])
+            typer.echo(f"[colab] The tray starts when you sign in ({where}).")
+        elif choice == "off":
+            done = autostart.disable()
+            typer.echo("[colab] The tray no longer starts when you sign in." if done
+                       else "[colab] The tray was not set to start when you sign in.")
+        else:
+            cmd = autostart.status()
+            typer.echo(f"autostart: on ({cmd})" if cmd else "autostart: off")
+    except OSError as e:
+        typer.echo(f"[colab] Could not change the sign-in start: {e}", err=True)
+        return 1
+    return 0
+
+
 def tray(
     interval: Annotated[float, typer.Option("--interval", help="Seconds between refreshes.")] = 30.0,
     detach: Annotated[bool, typer.Option("--detach", help="Start the tray in the background and return.")] = False,
@@ -103,6 +126,13 @@ def tray(
         bool, typer.Option("--snapshot", help="Print what the tray would show once and exit (no GUI needed).")
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", envvar="COLAB_CLI_JSON", help="With --snapshot: print JSON.")] = False,
+    autostart: Annotated[
+        str,
+        typer.Option(
+            "--autostart", metavar="on|off|status",
+            help="Start the tray when you sign in (Windows, macOS, Linux), stop doing so, or show the setting; then exit.",
+        ),
+    ] = "",
 ):
     """Show the active runtimes in a tray icon and panel.
 
@@ -114,6 +144,8 @@ def tray(
     """
     from colab_cli.common import state
 
+    if autostart:
+        raise typer.Exit(_autostart(autostart))
     if snapshot:
         now = time.time()
         snap = collect_snapshot(state, now=now)

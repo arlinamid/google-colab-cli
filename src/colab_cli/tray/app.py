@@ -469,6 +469,15 @@ class TrayApp(QObject):
         form.addRow(t(self.lang, "settings.interval"), interval)
         form.addRow(t(self.lang, "settings.notifications"), notifications)
         form.addRow(t(self.lang, "settings.language"), language)
+        from colab_cli.tray import autostart
+
+        try:
+            started_at_login = autostart.status() is not None
+        except OSError:
+            started_at_login = False
+        login = QCheckBox(t(self.lang, "settings.autostart"), objectName="autostart", checked=started_at_login)
+        login.setToolTip(t(self.lang, "settings.autostart_help"))
+        form.addRow("", login)
         buttons = QDialogButtonBox()
         buttons.addButton(QPushButton(t(self.lang, "save")), QDialogButtonBox.AcceptRole)
         buttons.addButton(QPushButton(t(self.lang, "cancel")), QDialogButtonBox.RejectRole)
@@ -481,6 +490,13 @@ class TrayApp(QObject):
         self.settings.tray_notifications = notifications.isChecked()
         self.settings.tray_language = language.currentData()
         self.settings_store.save(self.settings)
+        try:  # kept by the operating system, not settings.json (tray/autostart.py)
+            if login.isChecked():
+                autostart.enable([*colab_argv(self.state), "tray"])  # also refreshes a moved install
+            elif started_at_login:
+                autostart.disable()
+        except OSError as e:
+            self.notify(t(self.lang, "settings.autostart_failed", error=e), QSystemTrayIcon.Warning)
         self.interval = interval.value()
         self.timer.setInterval(int(self.interval * 1000))
         self.lang = pick_language(self.settings.tray_language, QLocale.system().name())
