@@ -300,3 +300,83 @@ def test_header_has_one_settings_and_a_refresh_icon_and_profiles_can_be_edited(t
     editors = [w for w in tray.windows if w.windowTitle() == "Colab CLI profilok"]
     assert len(editors) == 1 and editors[0].name.text() == ""
     editors[0].close()
+
+
+def _log(tray, name, text):
+    with open(tray.children[name]["log"], "a", encoding="utf-8") as f:
+        f.write(text)
+
+
+def test_a_started_profile_shows_at_once_and_cannot_start_twice(tray, tmp_path, mocker):
+    (tmp_path / "profiles.toml").write_text('[train]\nscript = "t.py"\ngpu = "T4"\n', encoding="utf-8")
+    log_dir = tmp_path / "tray-logs"
+    log_dir.mkdir()
+    (log_dir / "train.log").write_text("[colab] Started job old-run (pid 1) on 'old'.\n", encoding="utf-8")
+    mocker.patch.object(tray, "confirm", return_value=True)
+
+    tray.start_profile("train")
+    tray.children["train"]["started_at"] = NOW - 42
+
+    # Told at once, and a card before the runtime exists (the old run's lines do not count).
+    assert "train" in tray.notify.call_args.args[0] and "1–3 perc" in tray.notify.call_args.args[0]
+    _render(tray, [])
+    [card] = tray.panel.cards
+    texts = [w.text() for w in card.findChildren(QLabel)]
+    assert "train" in texts and "NVIDIA T4 · Indul" in texts
+    assert "Indítás… · 42 mp telt el" in texts
+    assert card.findChildren(QProgressBar)[0].maximum() == 0  # busy, no percent
+    assert card.findChildren(QPushButton) == []  # no runtime to act on yet
+    assert not tray.panel.profile_button.isEnabled()
+    assert "train" in tray.panel.profile_button.text() and "indul" in tray.panel.profile_button.text()
+    assert not tray.panel.profile_menu.actions()[0].isEnabled()
+
+    # A second click does not start a second runtime.
+    tray.start_profile("train")
+    assert tray.popen.call_count == 1
+    assert "már" in tray.notify.call_args.args[0]
+
+    _log(tray, "train", "[colab] Creating session 'train-1113-180000'...\n")
+    _render(tray, [])
+    texts = [w.text() for w in tray.panel.cards[0].findChildren(QLabel)]
+    assert "train-1113-180000" in texts and "Gép foglalása (1–3 perc)… · 42 mp telt el" in texts
+
+    # The runtime and its job show up: the normal card, with its buttons.
+    _log(tray, "train", "[colab] Session READY.\n[colab] Started job j-1 (pid 7) on 'train-1113-180000'.\n")
+    _render(tray, [_entry("train-1113-180000", _job())])
+    [card] = tray.panel.cards
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Leállítás"]
+
+    # The run ended: the profile can be started again.
+    tray.popen.return_value.poll.return_value = 0
+    tray.on_snapshot(_snap([_entry("train-1113-180000", _job())]))
+    tray.panel.render(tray.view(now=NOW))
+    assert tray.panel.profile_button.isEnabled()
+
+
+def test_a_kernel_profile_shows_its_setup_and_refreshes_sooner(tray, tmp_path, mocker):
+    (tmp_path / "profiles.toml").write_text(
+        '[ui]\nscript = "s.py"\nmode = "kernel"\nsession = "ui"\ngpu = "T4"\n', encoding="utf-8")
+    mocker.patch.object(tray, "confirm", return_value=True)
+    tray.start_profile("ui")
+    _log(tray, "ui", "[colab] Creating session 'ui'...\n[colab] Session READY.\nTelepítés kész.\n")
+
+    single_shot = mocker.patch.object(tray_app.QTimer, "singleShot")
+    tray.on_snapshot(_snap([_entry("ui", None, profile="ui")]))
+    single_shot.assert_called_with(tray_app.START_REFRESH_MS, tray.refresh)
+
+    tray.panel.render(tray.view(now=NOW))
+    [card] = tray.panel.cards
+    texts = [w.text() for w in card.findChildren(QLabel)]
+    assert "NVIDIA T4 · Indul" in texts
+    assert any(x.endswith("› Telepítés kész.") for x in texts)
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Leállítás"]
+
+    # Started (the script finished): a service again, and no faster refresh.
+    _log(tray, "ui", "[colab] Script finished on 'ui'.\n")
+    single_shot.reset_mock()
+    tray.on_snapshot(_snap([_entry("ui", None, profile="ui")]))
+    single_shot.assert_not_called()
+    tray.panel.render(tray.view(now=NOW))
+    texts = [w.text() for w in tray.panel.cards[0].findChildren(QLabel)]
+    assert "NVIDIA T4 · Szolgáltatás" in texts
+    assert "ui" in tray.panel.profile_button.text() and "fut" in tray.panel.profile_button.text()

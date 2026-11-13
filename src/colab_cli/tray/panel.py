@@ -46,7 +46,7 @@ MAX_VISIBLE_CARDS = 3
 
 DOT = {
     "running": "#34a853", "service": "#34a853", "stalled": "#f9ab00", "idle": "#9aa0a6",
-    "done": "#4285f4", "failed": "#ea4335", "stopped": "#9aa0a6",
+    "done": "#4285f4", "failed": "#ea4335", "stopped": "#9aa0a6", "starting": "#8ab4f8",
 }
 STATUS_DOT = {"connected": "#34a853", "error": "#ea4335", "stale": "#f9ab00"}
 TEXT, MUTED, ORANGE, RED, WARN = "#e8eaed", "#9aa0a6", "#f9ab00", "#f28b82", "#fdd663"
@@ -344,11 +344,19 @@ class Panel(QWidget):
             bar_row.addWidget(bar, 1)
             bar_row.addWidget(_label(f"{card['percent']:.0f}%"))
             box.addLayout(bar_row)
+        if card["state"] == "starting":
+            busy = QProgressBar(objectName="progress", textVisible=False)
+            busy.setRange(0, 0)  # moves without a percent: creating a runtime has none
+            busy.setFixedHeight(8)
+            box.addWidget(busy)
         if lines["detail"]:
             detail = _label(lines["detail"], "muted")
             detail.setObjectName("detail")
             detail.setWordWrap(True)
             box.addWidget(detail)
+        if card.get("pending"):
+            # Still being created: no runtime to open a log, SSH or stop yet.
+            return frame
         if not card["local"]:
             # Unknown to this CLI: no session name to act on (see the hint).
             return frame
@@ -391,8 +399,10 @@ class Panel(QWidget):
         lang = view["lang"]
         names = view["profiles"]
         self.profile_menu.clear()
+        busy = view.get("profile_states") or {}
         for name in names:
             action = self.profile_menu.addAction(name)
+            action.setEnabled(name not in busy)  # one run per profile: a second click is a second runtime
             action.triggered.connect(lambda _=False, n=name: self.profile_clicked.emit(n))
         if names:
             self.profile_menu.addSeparator()
@@ -400,7 +410,10 @@ class Panel(QWidget):
         edit.triggered.connect(self.edit_profiles_clicked)
         main = view.get("last_profile") if view.get("last_profile") in names else (names[0] if names else None)
         self._main_profile = main
-        if main:
+        self.profile_button.setEnabled(main not in busy)
+        if main in busy:
+            self.profile_button.setText(f" {t(lang, 'profile_' + busy[main], name=main)}")
+        elif main:
             self.profile_button.setText(f" {t(lang, 'start_profile')}: {main}")
         else:
             self.profile_button.setText(f" {t(lang, 'create_profile')}")

@@ -409,6 +409,9 @@ def _run_kernel(name: str, p: Profile, script: str, session: str, reuse: bool, n
     for var, value in p.vars.items():
         argv += ["--var", f"{var}={json.dumps(value)}"]
     code = _call(*argv)
+    if code == 0:
+        # `colab tray` reads this line to know the start is over (tray_model.start_progress).
+        typer.echo(f"[colab] Script finished on '{session}'.", err=True)
     if code == 0 and p.forward:
         code = _forward(session, p, no_open)
     if p.stop_when_done:

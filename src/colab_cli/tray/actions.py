@@ -41,6 +41,13 @@ def card_lines(card: Dict[str, Any], lang: str) -> Dict[str, Optional[str]]:
         value = m["value"]
         shown = fmt_number(value, lang, 2) if isinstance(value, float) else str(value)
         metric = f"{m['name']} {shown}{arrow}"
+    if card["state"] == "starting":
+        parts = [t(lang, f"phase.{card.get('phase') or 'launching'}")]
+        if card.get("elapsed_s") is not None:
+            parts.append(t(lang, "elapsed", time=fmt_duration(card["elapsed_s"], lang)))
+        if card.get("setup_line"):
+            parts.append(f"› {card['setup_line']}")
+        return {"subtitle": subtitle, "metric": metric, "detail": " · ".join(parts)}
     parts = []
     if card["epoch"]:
         parts.append(t(lang, "epoch", cur=card["epoch"][0], total=card["epoch"][1]))

@@ -25,7 +25,7 @@ import os
 import subprocess
 import time
 import webbrowser
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from PySide6.QtCore import QLocale, QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from colab_cli.common import colab_argv
-from colab_cli.profiles import ProfileError, load_profiles, profiles_path
+from colab_cli.profiles import ProfileError, load_profiles, profile_summary, profiles_path
 from colab_cli.tray import actions
 from colab_cli.tray.i18n import fmt_age, pick_language, t
 from colab_cli.tray.icon import status_icon
@@ -58,8 +58,32 @@ from colab_cli.tray_model import (
     cu_model,
     events,
     icon_state,
+    merge_starts,
     sessions_to_stop,
+    start_progress,
 )
+
+
+START_REFRESH_MS = 10_000  # refresh this often while a profile's runtime is being created
+_RUN_LOG_PART = 64 * 1024
+
+
+def _read_run_log(path: str, offset: int) -> str:
+    """A profile run's output since ``offset``: its start and its newest part."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(min(offset, size))
+            if size - offset <= 2 * _RUN_LOG_PART:
+                data = f.read()
+            else:
+                head = f.read(_RUN_LOG_PART)
+                f.seek(size - _RUN_LOG_PART)
+                data = head + b"\n" + f.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
 
 
 class _Signals(QObject):
@@ -147,7 +171,23 @@ class TrayApp(QObject):
             self.stopping.add(name)
             self.notify(t(self.lang, "notify.stopping", session=name))
             self.run_cli(["stop", "-s", name])
+        if any(s["progress"]["phase"] != "ready" for s in self.starts()):
+            # A runtime is being created: show it as soon as it is there.
+            QTimer.singleShot(START_REFRESH_MS, self.refresh)
         self.redraw()
+
+    def starts(self) -> List[Dict[str, Any]]:
+        """The profile runs this tray started that still run, with their progress."""
+        out = []
+        for name, child in self.children.items():
+            if child["proc"].poll() is not None:
+                continue
+            out.append({
+                "profile": name, "session": child.get("session"), "hardware": child.get("hardware"),
+                "mode": child["mode"], "started_at": child.get("started_at") or time.time(),
+                "progress": start_progress(_read_run_log(child["log"], child.get("offset", 0))),
+            })
+        return out
 
     def services(self) -> Set[str]:
         return {c["session"] for c in self.children.values()
@@ -170,7 +210,8 @@ class TrayApp(QObject):
         snap = self.snapshot or {"sessions": [], "ok": True, "account": None, "last_ok_at": None}
         services = self.services()
         icon = icon_state(snap, now=now, interval=self.interval, services=services)
-        cards = [card_model(e, now, services) for e in snap.get("sessions", [])]
+        starts = self.starts()
+        cards = merge_starts([card_model(e, now, services) for e in snap.get("sessions", [])], starts, now)
         self._load_profiles()
         open_by_session = {}
         for e in snap.get("sessions", []):
@@ -202,6 +243,8 @@ class TrayApp(QObject):
             } for c in cards],
             "cu": cu_model(snap.get("account")),
             "profiles": list(self.profiles),
+            "profile_states": {s["profile"]: "running" if s["progress"]["phase"] == "ready" else "starting"
+                               for s in starts},
             "last_profile": self.settings.tray_last_profile,
             "updated_text": updated,
             "tooltip": actions.status_text(icon, cards, self.lang),
@@ -382,6 +425,11 @@ class TrayApp(QObject):
         return box.clickedButton() is start
 
     def start_profile(self, name: str):
+        child = self.children.get(name)
+        if child and child["proc"].poll() is None:
+            # Creating a runtime takes minutes; a second click would create a second one.
+            self.notify(t(self.lang, "notify.already_starting", name=name))
+            return
         self._load_profiles()
         p = self.profiles.get(name)
         if p is None:
@@ -390,10 +438,19 @@ class TrayApp(QObject):
         if not self.confirm(*actions.profile_confirm(name, p, rate, self.lang)):
             return
         log = os.path.join(self.log_dir, f"{name}.log")
+        try:  # the log is appended to: this run's lines start here
+            offset = os.path.getsize(log)
+        except OSError:
+            offset = 0
         proc = self.run_cli(["profile", "run", name], log=log)
-        self.children[name] = {"proc": proc, "log": log, "session": p.session, "mode": p.mode}
+        self.children[name] = {
+            "proc": proc, "log": log, "offset": offset, "session": p.session, "mode": p.mode,
+            "started_at": time.time(), "hardware": profile_summary(p)["hardware"],
+        }
         self.settings.tray_last_profile = name
         self.settings_store.save(self.settings)
+        self.notify(t(self.lang, "notify.starting", name=name))
+        self.redraw()
         QTimer.singleShot(5000, self.refresh)
 
     def notify(self, text: str, icon=QSystemTrayIcon.Information):

@@ -187,6 +187,9 @@ def test_run_kernel_profile_with_forward(profiles_file, calls, mock_common_state
     assert fwd[fwd.index("-i") + 1].endswith("k")
     opened.assert_called_once_with("http://127.0.0.1:8188")
     assert len(calls) == 2  # stop_when_done = false: no `colab stop`
+    # The tray follows these lines (tray_model.start_progress).
+    assert "[colab] Script finished on 'ui'." in result.output
+    assert "[colab] Waiting for " in result.output and "[colab] Ready: " in result.output
 
 
 def test_run_kernel_profile_stops_when_done_and_on_failure(profiles_file, calls, mock_common_state, mocker):

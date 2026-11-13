@@ -154,3 +154,14 @@ def test_terminal_commands_wait_for_enter(mocker):
     call.side_effect = KeyboardInterrupt  # Ctrl+C ends a follow, not the window
     assert hold.main(["--", "colab", "job", "tail"]) == 130
     assert prompt.call_count == 2
+
+
+def test_starting_card_says_what_happens_and_for_how_long():
+    card = _card(state="starting", job_id=None, can_stop_job=False, percent=None, metric=None, epoch=None,
+                 eta_s=None, last_output_age_s=None, phase="allocating", elapsed_s=42, setup_line=None,
+                 pending=True)
+    lines = a.card_lines(card, "hu")
+    assert lines["subtitle"] == "NVIDIA T4 · Indul"
+    assert lines["detail"] == "Gép foglalása (1–3 perc)… · 42 mp telt el"
+    card.update(phase="setup", setup_line="Telepítés kész.", elapsed_s=200)
+    assert a.card_lines(card, "en")["detail"] == "Running the script… · 3 min elapsed · › Telepítés kész."

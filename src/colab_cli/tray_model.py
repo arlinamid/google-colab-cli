@@ -23,10 +23,14 @@ Cost rule: the tray must never keep a runtime alive. It sends no keep-alive
 and does not use the kernel. It reads a runtime's job files (Contents API)
 on every poll only while a job runs there; a runtime without a running job is
 looked at again every IDLE_RECHECK_SEC (to notice a job started from a
-terminal), an orphan (no local session) never.
+terminal), an orphan (no local session) never. A runtime that has just
+appeared is the exception for NEW_RUNTIME_WATCH_SEC: a profile's runtime is
+saved before its job starts, and its job should show at once, not minutes
+later. That is a few reads in its first minutes; it cannot keep it alive.
 """
 
 import datetime
+import re
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -43,6 +47,7 @@ from colab_cli.results import SCHEMA
 
 ACCOUNT_EVERY_SEC = 300.0
 IDLE_RECHECK_SEC = 300.0
+NEW_RUNTIME_WATCH_SEC = 180.0
 LOW_BALANCE_HOURS = 1.0
 # Colab reclaims an idle runtime after about 90 minutes.
 IDLE_WARN_SEC = 75 * 60
@@ -116,13 +121,15 @@ def _session_entry(s, assignment, prev_entry, now: float) -> Dict[str, Any]:
         "last_execution_at": _parse_local_time(s.last_execution[2]) if s and s.last_execution else None,
         "job": (prev_entry or {}).get("job"),
         "jobs_checked_at": (prev_entry or {}).get("jobs_checked_at"),
+        "first_seen_at": (prev_entry or {}).get("first_seen_at") or now,
     }
     if s is None:
         return entry
     job = entry["job"]
     running = bool(job and job["state"] in RUNNING_STATES)
     checked = entry["jobs_checked_at"]
-    if running or checked is None or now - checked >= IDLE_RECHECK_SEC:
+    new = now - entry["first_seen_at"] < NEW_RUNTIME_WATCH_SEC
+    if running or new or checked is None or now - checked >= IDLE_RECHECK_SEC:
         files = ContentsClient(s)
         ids = _job_ids(files)
         entry["jobs_checked_at"] = now
@@ -191,6 +198,91 @@ def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional
     except Exception as e:  # shown on the panel; the last data stays
         snap.update(ok=False, error=f"{type(e).__name__}: {e}")
     return snap
+
+
+# --- profiles started by the tray ---
+#
+# Creating a runtime takes one to three minutes and a kernel profile's script
+# (installs, downloads) often longer. The tray shows a card from the click on,
+# following the lines `colab profile run` writes to its log.
+
+START_LINE_MAX = 100
+_CREATING = re.compile(r"\[colab\] Creating session '(.+?)'")
+_REUSING = re.compile(r"\[colab\] Reusing runtime '(.+?)'")
+_READY_MARKERS = ("[colab] Started job ", "[colab] Script finished on ", "[colab] Ready: ")
+
+
+def start_progress(log_text: str) -> Dict[str, Any]:
+    """Where a `colab profile run` is, from its output.
+
+    ``phase``: launching (nothing yet), allocating (the runtime is being
+    created), setup (the runtime is there; the script or job is starting),
+    waiting_ready (waiting for the profile's ready URL), ready (started).
+    ``line`` is the newest other line, e.g. the script's own output; of a
+    progress bar redrawn with carriage returns, the last drawing.
+    """
+    phase, session, line = "launching", None, None
+    for raw in log_text.splitlines():
+        text = next((part.strip() for part in reversed(raw.split("\r")) if part.strip()), "")
+        if not text:
+            continue
+        m = _CREATING.match(text)
+        if m:
+            phase, session, line = "allocating", m.group(1), None
+            continue
+        m = _REUSING.match(text)
+        if m:
+            phase, session, line = "setup", m.group(1), None
+            continue
+        if text.startswith("[colab] Session READY"):
+            phase, line = "setup", None
+        elif text.startswith("[colab] Waiting for "):
+            phase, line = "waiting_ready", None
+        elif text.startswith(_READY_MARKERS):
+            phase, line = "ready", None
+        else:
+            line = text[len("[colab] "):] if text.startswith("[colab] ") else text
+    if line and len(line) > START_LINE_MAX:
+        line = line[:START_LINE_MAX - 1] + "…"
+    return {"phase": phase, "session": session, "line": line}
+
+
+def starting_card(start: Dict[str, Any], name: str, elapsed: int) -> Dict[str, Any]:
+    """The card of a profile whose runtime is not in the snapshot yet."""
+    progress = start["progress"]
+    return {
+        "name": name, "hardware": start.get("hardware") or "?", "local": True, "profile": start["profile"],
+        "state": "starting", "pending": True, "phase": progress["phase"], "elapsed_s": elapsed,
+        "setup_line": progress.get("line"),
+        "job_id": None, "can_stop_job": False, "percent": None, "metric": None, "epoch": None, "cell": None,
+        "eta_s": None, "last_output_age_s": None, "diagnosis": None, "forwards": [], "open_url": None,
+    }
+
+
+def merge_starts(cards: List[Dict[str, Any]], starts: List[Dict[str, Any]], now: float) -> List[Dict[str, Any]]:
+    """Add the profiles the tray is starting to the runtime cards.
+
+    ``starts``: {"profile", "session" (the profile's fixed session or None),
+    "hardware", "mode", "started_at", "progress" (start_progress)}. Until its
+    runtime is in the snapshot a start has a card of its own (``pending``,
+    no buttons); a kernel profile's runtime card says the script is still
+    setting up. A finished start adds nothing.
+    """
+    cards = [dict(c) for c in cards]
+    pending = []
+    for s in starts:
+        progress = s["progress"]
+        if progress["phase"] == "ready":
+            continue
+        name = progress.get("session") or s.get("session")
+        elapsed = max(0, int(round(now - s["started_at"])))
+        own = next((c for c in cards if name and c["local"] and c["name"] == name), None)
+        if own is None:
+            pending.append(starting_card(s, name or s["profile"], elapsed))
+        elif s.get("mode") == "kernel" and own["state"] in ("idle", "service"):
+            own.update(state="starting", pending=False, phase=progress["phase"], elapsed_s=elapsed,
+                       setup_line=progress.get("line"))
+    return pending + cards
 
 
 # --- pure functions for the panel ---

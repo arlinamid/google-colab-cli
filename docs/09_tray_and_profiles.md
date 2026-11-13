@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Feedback while a profile starts. Creating a runtime takes 1–3 minutes and the panel showed nothing until it existed, so a GPU profile was clicked twice: two T4s, the first left as an orphan. Now a click is answered at once (a notification and a "Starting" card with a moving bar, the phase and the time so far: launching, getting a runtime, running the script, waiting for the service; the phase comes from the run's own lines in `tray-logs/NAME.log`, read from where this run starts). A kernel profile's runtime card says its script is still setting up, with the script's newest line. A profile cannot be started again while its run is alive (menu entry and main button disabled, a second click only notifies), and the tray refreshes every 10 s while a runtime is being created. `colab profile run` prints `Script finished on 'S'.` after a kernel script. Also: a runtime seen before its first job started (a profile's runtime is saved before its job) was looked at again only after IDLE_RECHECK_SEC (5 minutes); a new runtime is now watched on every refresh for its first NEW_RUNTIME_WATCH_SEC (3 minutes). Live (demo profile, CPU, through `TrayApp.start_profile`): the card appeared after 1 s, the second click started nothing, and the job's card showed "Running" 14 s after the click (before: idle for over 4 minutes).
 2026-11-13: Screenshot of the panel during the demo profile (`docs/images/tray_panel_training.png`, rendered by the tray's own `Panel` with live data). The demo (`examples/tray_demo_train.py`, `examples/profiles.example.toml`) ran on a real desktop: progress, epochs and the falling loss on the card, and `stop_when_done` stopped the runtime after the job. Cost estimates in the tray and in budgets now use the runtime's own rate (docs/08_agent_feedback.md, D).
 2026-11-13: The tray's own windows with help (`tray/windows.py`): a profile editor (list, a form whose fields follow the mode, file pickers, help for the focused field, validation that marks the field; saves through `profiles.py`, "Save and start", "Edit as text") and a log window (runs `colab job tail [-F]` or `colab log` with QProcess, Follow, Refresh, Copy; ANSI codes and progress-bar redraws are cleaned). Form logic without Qt: `tray/profile_form.py`. SSH stays in a terminal (interactive).
 2026-11-13: `colab profile edit` (opens profiles.toml in $VISUAL/$EDITOR, creating it with commented examples, then validates it); the panel's profile menu has "Edit profiles…" and, with no profiles, the main button creates one. Refresh and Settings are icons in the header (no duplicate rows). Terminal actions (Log, SSH, job tail, profile edit) run through `python -m colab_cli.tray.hold`, so the window waits for Enter instead of closing when the command ends (Windows).
@@ -112,7 +113,8 @@ like ports. `ready` defaults to `open`.
   `--foreground` runs `colab run` and waits (the runtime stops at the end).
 - **kernel**: with `forward`, the SSH key is checked first (as `colab ssh`
   does). Then `colab new` (or reuse), `colab exec -f SCRIPT` with
-  `--var NAME=JSON` for each `vars` entry, then `colab forward` in the
+  `--var NAME=JSON` for each `vars` entry (and `[colab] Script finished on
+  'S'.` once it succeeds, which the tray follows), then `colab forward` in the
   foreground; once `ready` answers (any status below 500), `open` is opened
   in the browser (`--no-open` skips it). Ctrl+C closes the forward. With
   `stop_when_done` the runtime is stopped when the run ends (also after a
@@ -127,8 +129,11 @@ reads settings from globals (e.g. `#@param` cells).
 `collect_snapshot(state, prev)` returns `{schema, type: "tray_snapshot",
 taken_at, last_ok_at, ok, error, account, sessions[]}`; each session has
 name, endpoint, hardware, `local`, `profile`, `stop_when_done`, `running`,
-`activity`, `last_execution_at`, the newest `job` record and
-`jobs_checked_at`. A failed refresh keeps the previous data (`ok` false,
+`activity`, `last_execution_at`, the newest `job` record,
+`jobs_checked_at` and `first_seen_at`. Job files are read on every refresh
+while a job runs and during a runtime's first `NEW_RUNTIME_WATCH_SEC`
+(3 minutes: a profile's runtime is saved before its job starts), otherwise
+every `IDLE_RECHECK_SEC` (5 minutes). A failed refresh keeps the previous data (`ok` false,
 `error` set). Pure functions on top of it:
 
 - `icon_state(snap, now, interval)`: level, colour and the same in words.
@@ -148,6 +153,15 @@ name, endpoint, hardware, `local`, `profile`, `stop_when_done`, `running`,
   an hour.
 - `sessions_to_stop(snap, already)`: profile runtimes with `stop_when_done`
   whose job ended.
+- `start_progress(log_text)`: where a `colab profile run` is, from its
+  output: launching, allocating (`Creating session 'S'...`, which also names
+  the runtime), setup (`Session READY` / `Reusing runtime`), waiting_ready
+  (`Waiting for URL`), ready (`Started job`, `Script finished`, `Ready:`),
+  plus the newest other line (of a progress bar, its last drawing).
+  `merge_starts(cards, starts, now)`: a start whose runtime is not in the
+  snapshot yet gets a card of its own (state `starting`, `pending`: no
+  buttons); a kernel profile's idle or service card becomes `starting` with
+  the script's newest line until the start is over.
 
 `colab tray --snapshot [--json]` prints the snapshot (with `icon`, `cards`
 and `cu`) and exits; it needs no GUI, so scripts, agents and the live test
@@ -214,9 +228,17 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
   "Save and start" starts it; "Edit as text" opens `colab profile edit`.
 - **Start profile** asks first, naming the mode, hardware, the account's
   current rate and the session it reuses. The tray runs
-  `colab profile run NAME` as a child (output in `tray-logs/NAME.log`); a
-  kernel profile that keeps running shows as a "service" card with an
-  **Open** button; a non-zero exit is notified with the log path.
+  `colab profile run NAME` as a child (output appended to
+  `tray-logs/NAME.log`; the tray reads it from where this run starts) and
+  answers at once: a notification and a **Starting** card with a moving bar,
+  the phase and the time so far ("Getting a runtime (1–3 min)… · 47 s
+  elapsed"). While the run is alive the profile cannot be started again: its
+  menu entry and the main button are disabled ("NAME starting…", then "NAME
+  running" for a kernel profile that keeps a forward open), and a second
+  click only notifies; creating a runtime takes minutes and a second click
+  used to create a second runtime. The panel refreshes every 10 s until the
+  runtime is there. A kernel profile that keeps running shows as a "service"
+  card with an **Open** button; a non-zero exit is notified with the log path.
 - Notifications follow `events()`; `stop_when_done` runtimes are stopped
   once (`colab stop`), with a notification.
 - Settings (`settings.json`): refresh interval, notifications, language
@@ -236,7 +258,8 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
   writing, and `profile run` (the subcommands it calls, reuse, forward,
   readiness, stop_when_done, key check).
 - `tests/test_tray_model.py`: the snapshot (no proxy access for idle runtimes
-  between rechecks), icon levels, cards, CU, events, stop targets.
+  between rechecks, a new runtime watched for its first job), icon levels,
+  cards, CU, events, stop targets, start phases and starting cards.
   `tests/test_tray_actions.py`: texts in both languages, stop choices,
   commands, terminals. `tests/test_tray_cmd.py`: snapshot, desktop and extra
   checks, the lock, `--detach`. `tests/test_tray_panel.py`: the panel and

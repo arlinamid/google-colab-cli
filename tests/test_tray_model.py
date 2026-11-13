@@ -107,7 +107,8 @@ def test_snapshot_collects_runtimes_jobs_and_account(world):
 
 
 def test_idle_runtimes_are_not_contacted_on_every_poll(world):
-    first = tm.collect_snapshot(world.state, now=NOW)
+    first = tm.collect_snapshot(world.state, now=NOW - tm.NEW_RUNTIME_WATCH_SEC)
+    first = tm.collect_snapshot(world.state, prev=first, now=NOW)  # both seen for a while
     world.calls.clear()
 
     tm.collect_snapshot(world.state, prev=first, now=NOW + 30)
@@ -289,3 +290,94 @@ def test_a_runtime_behind_a_forward_is_a_service(world):
 
     down = tm.card_model({**idle, "forwards": [{"local_port": 8188, "remote": "x", "listening": False}]}, now=NOW)
     assert down["state"] == "service" and down["open_url"] is None
+
+
+# --- profiles started by the tray (feedback while the runtime is created) ---
+
+def test_start_progress_follows_the_profile_run_log():
+    assert tm.start_progress("") == {"phase": "launching", "session": None, "line": None}
+    log = "[colab] Creating session 'train-1113-180000'...\n"
+    assert tm.start_progress(log) == {"phase": "allocating", "session": "train-1113-180000", "line": None}
+    # A refused allocation is shown as it is.
+    refused = log + "[colab] Allocation refused (precondition failed).\n"
+    assert tm.start_progress(refused)["line"] == "Allocation refused (precondition failed)."
+    # After READY the script's own output is the line; progress bars redraw with \r.
+    log += "[colab] Session READY.\n$ pip install -q x\nDownloading model\r 10%\r 55%\n"
+    assert tm.start_progress(log) == {"phase": "setup", "session": "train-1113-180000", "line": "55%"}
+    assert tm.start_progress(log + "[colab] Started job j-1 (pid 7) on 'train-1113-180000'.\n")["phase"] == "ready"
+    assert tm.start_progress(log + "[colab] Script finished on 'train-1113-180000'.\n")["phase"] == "ready"
+    waiting = log + "[colab] Script finished on 'x'.\n[colab] Waiting for http://127.0.0.1:8188 ...\n"
+    assert tm.start_progress(waiting)["phase"] == "waiting_ready"
+    assert tm.start_progress(waiting + "[colab] Ready: http://127.0.0.1:8188 (Ctrl+C closes the forward).\n")[
+        "phase"] == "ready"
+    reuse = tm.start_progress("[colab] Reusing runtime 'ui'.\n")
+    assert reuse["phase"] == "setup" and reuse["session"] == "ui"
+    assert len(tm.start_progress("Downloading " + "x" * 300 + "\n")["line"]) <= 100
+
+
+def _start(profile="train", phase="allocating", session=None, line=None, mode="job", hint=None):
+    return {"profile": profile, "session": hint, "hardware": "T4", "mode": mode, "started_at": NOW - 42,
+            "progress": {"phase": phase, "session": session, "line": line}}
+
+
+def _card_entry(name, **kw):
+    e = {"name": name, "endpoint": f"ep-{name}", "hardware": "T4", "local": True, "profile": None,
+         "stop_when_done": None, "running": None, "activity": None, "last_execution_at": None,
+         "jobs_checked_at": NOW, "job": None, "forwards": []}
+    e.update(kw)
+    return e
+
+
+def test_a_starting_profile_has_a_card_until_its_runtime_shows_up():
+    other = tm.card_model(_card_entry("other"), NOW)
+
+    cards = tm.merge_starts([other], [_start(session="train-1113-180000")], NOW)
+
+    assert [c["name"] for c in cards] == ["train-1113-180000", "other"]
+    start = cards[0]
+    assert start["state"] == "starting" and start["pending"] and start["phase"] == "allocating"
+    assert start["elapsed_s"] == 42 and start["hardware"] == "T4" and start["profile"] == "train"
+    # Before the log names the runtime, the card has the profile's name.
+    assert tm.merge_starts([], [_start(phase="launching")], NOW)[0]["name"] == "train"
+
+    # The runtime is in the snapshot: its own card takes over.
+    mine = tm.card_model(_card_entry("train-1113-180000"), NOW)
+    assert tm.merge_starts([mine], [_start(phase="setup", session="train-1113-180000")], NOW) == [mine]
+    # Finished starting: nothing more to show.
+    assert tm.merge_starts([], [_start(phase="ready", session="x")], NOW) == []
+
+
+def test_a_kernel_profile_shows_its_setup_on_the_runtime_card():
+    ui = tm.card_model(_card_entry("ui"), NOW, services={"ui"})
+
+    [card] = tm.merge_starts([ui], [_start("ui", "setup", "ui", "Telepítés kész.", mode="kernel", hint="ui")], NOW)
+
+    assert card["state"] == "starting" and not card["pending"]
+    assert card["setup_line"] == "Telepítés kész." and card["phase"] == "setup"
+    # A reused runtime is found by the profile's session before the log names it.
+    [card] = tm.merge_starts([tm.card_model(_card_entry("ui"), NOW)],
+                             [_start("ui", "launching", None, mode="kernel", hint="ui")], NOW)
+    assert card["name"] == "ui" and card["state"] == "starting"
+    # A running job keeps its state.
+    busy = tm.card_model(_card_entry("ui", job={"id": "j", "state": "running", "overall_percent": 10.0}), NOW)
+    [card] = tm.merge_starts([busy], [_start("ui", "setup", "ui", "x", mode="kernel", hint="ui")], NOW)
+    assert card["state"] == "running"
+
+
+def test_a_new_runtime_is_watched_for_its_first_job(world):
+    """A profile's runtime shows up before its job starts; the job must not wait for the recheck."""
+    first = tm.collect_snapshot(world.state, now=NOW)
+    assert first["sessions"][1]["job"] is None and first["sessions"][1]["first_seen_at"] == NOW
+    world.calls.clear()
+    late = FakeFiles(_job_files("late-20261113-100100-bbbb"), world.calls)  # started on 'idle' just now
+    trains = FakeFiles(world.files, world.calls)
+    tm.ContentsClient.side_effect = lambda s: late if s.name == "idle" else trains
+
+    second = tm.collect_snapshot(world.state, prev=first, now=NOW + 30)
+
+    assert second["sessions"][1]["job"]["id"] == "late-20261113-100100-bbbb"
+    assert second["sessions"][1]["first_seen_at"] == NOW
+    # Later, an idle runtime goes back to the slow recheck.
+    idle_later = tm.collect_snapshot(world.state, prev=first, now=NOW + tm.NEW_RUNTIME_WATCH_SEC + 1)
+    assert tm.NEW_RUNTIME_WATCH_SEC <= 180 < tm.IDLE_RECHECK_SEC
+    assert idle_later["sessions"][1]["first_seen_at"] == NOW
