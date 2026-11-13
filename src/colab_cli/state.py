@@ -58,6 +58,12 @@ class Settings(BaseModel):
     latest_version: Optional[str] = None
     # Wheel of that fork release, installed by `colab update --install`.
     latest_wheel_url: Optional[str] = None
+    # `colab tray` (docs/09): refresh interval, notifications, panel language
+    # ("auto", "hu", "en") and the profile its main button starts.
+    tray_interval: Optional[float] = None
+    tray_notifications: bool = True
+    tray_language: str = "auto"
+    tray_last_profile: Optional[str] = None
 
 
 _OWNER_ONLY_MODE = 0o600

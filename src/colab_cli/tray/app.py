@@ -1,0 +1,386 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The tray process (docs/09): icon, panel, refresh, notifications, actions.
+
+One Qt event loop. A QTimer starts collect_snapshot() on a worker thread
+(the only thread that uses the CLI state); its result comes back as a
+signal. Every action runs one of the CLI's subcommands as a child process
+(`colab_argv()`): `colab job stop`, `colab stop`, `colab profile run`, and
+`colab job tail` / `colab ssh` in a new terminal.
+"""
+
+import os
+import subprocess
+import time
+import webbrowser
+from typing import Any, Dict, Optional, Set
+
+from PySide6.QtCore import QLocale, QObject, QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QSystemTrayIcon,
+    QVBoxLayout,
+)
+
+from colab_cli.common import colab_argv
+from colab_cli.profiles import ProfileError, load_profiles, profiles_path
+from colab_cli.tray import actions
+from colab_cli.tray.i18n import fmt_age, pick_language, t
+from colab_cli.tray.icon import status_icon
+from colab_cli.tray.panel import Panel
+from colab_cli.tray_model import (
+    card_model,
+    collect_snapshot,
+    cu_model,
+    events,
+    icon_state,
+    sessions_to_stop,
+)
+
+
+class _Signals(QObject):
+    done = Signal(dict)
+
+
+class _Refresh(QRunnable):
+    def __init__(self, state, prev, signals):
+        super().__init__()
+        self.state, self.prev, self.signals = state, prev, signals
+
+    def run(self):
+        self.signals.done.emit(collect_snapshot(self.state, prev=self.prev))
+
+
+class TrayApp(QObject):
+    def __init__(self, state, interval: float):
+        super().__init__()
+        self.state = state
+        self.settings_store = state.settings_store
+        self.settings = self.settings_store.load()
+        self.interval = self.settings.tray_interval or interval
+        self.lang = pick_language(self.settings.tray_language, QLocale.system().name())
+        self.snapshot: Optional[Dict[str, Any]] = None
+        self.busy = False
+        self.stopping: Set[str] = set()
+        self.children: Dict[str, Dict[str, Any]] = {}  # profile -> {proc, log, session, mode}
+        self.profiles = {}
+        self.log_dir = os.path.join(os.path.dirname(profiles_path(state.config_path)), "tray-logs")
+
+        self.signals = _Signals()
+        self.signals.done.connect(self.on_snapshot)
+        self.tray = QSystemTrayIcon(status_icon("#9aa0a6"))
+        self.tray.activated.connect(self._activated)
+        menu = QMenu()
+        for key, slot in (("refresh_now", self.refresh), ("settings", self.open_settings), ("quit", self.quit)):
+            action = QAction(t(self.lang, key), menu)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+        self.menu = menu
+        self.tray.setContextMenu(menu)
+        self.tray.setToolTip(t(self.lang, "tooltip.prefix"))
+
+        self.panel = Panel()
+        self.panel.log_clicked.connect(lambda c: self.in_terminal(actions.log_argv(c)))
+        self.panel.ssh_clicked.connect(lambda c: self.in_terminal(actions.ssh_argv(c)))
+        self.panel.open_clicked.connect(self.open_service)
+        self.panel.stop_clicked.connect(self.ask_stop)
+        self.panel.profile_clicked.connect(self.start_profile)
+        self.panel.refresh_clicked.connect(self.refresh)
+        self.panel.settings_clicked.connect(self.open_settings)
+        self.panel.quit_clicked.connect(self.quit)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.ticker = QTimer(self)  # "Updated: 12 s ago" and stale detection
+        self.ticker.timeout.connect(self.redraw)
+
+    def start(self):
+        self.tray.show()
+        self.timer.start(int(self.interval * 1000))
+        self.ticker.start(5000)
+        self.refresh()
+
+    # --- refresh ---
+
+    def refresh(self):
+        if self.busy:
+            return
+        self.busy = True
+        QThreadPool.globalInstance().start(_Refresh(self.state, self.snapshot, self.signals))
+
+    def on_snapshot(self, snap: Dict[str, Any]):
+        self.busy = False
+        prev, self.snapshot = self.snapshot, snap
+        self._reap_children()
+        if self.settings.tray_notifications:
+            for event in events(prev, snap):
+                self.notify(actions.notification(event, self.lang),
+                            QSystemTrayIcon.Critical if event["kind"] in ("job_failed", "session_gone")
+                            else QSystemTrayIcon.Information)
+        for name in sessions_to_stop(snap, self.stopping):
+            self.stopping.add(name)
+            self.notify(t(self.lang, "notify.stopping", session=name))
+            self.run_cli(["stop", "-s", name])
+        self.redraw()
+
+    def services(self) -> Set[str]:
+        return {c["session"] for c in self.children.values()
+                if c["mode"] == "kernel" and c["proc"].poll() is None and c["session"]}
+
+    def _reap_children(self):
+        for name, child in list(self.children.items()):
+            code = child["proc"].poll()
+            if code is None:
+                continue
+            del self.children[name]
+            if code != 0:
+                self.notify(t(self.lang, "notify.profile_failed", name=name, code=code, log=child["log"]),
+                            QSystemTrayIcon.Warning)
+
+    # --- drawing ---
+
+    def view(self, now: Optional[float] = None) -> Dict[str, Any]:
+        now = time.time() if now is None else now
+        snap = self.snapshot or {"sessions": [], "ok": True, "account": None, "last_ok_at": None}
+        services = self.services()
+        icon = icon_state(snap, now=now, interval=self.interval, services=services)
+        cards = [card_model(e, now, services) for e in snap.get("sessions", [])]
+        self._load_profiles()
+        open_by_session = {}
+        for e in snap.get("sessions", []):
+            p = self.profiles.get(e.get("profile"))
+            if p and p.open:
+                open_by_session[e["name"]] = p.open
+        status = "stale" if icon["level"] == "stale" else ("error" if not snap.get("ok") else "connected")
+        status_text = {"stale": t(self.lang, "stale"), "error": t(self.lang, "refresh_failed"),
+                       "connected": t(self.lang, "connected")}[status]
+        if snap.get("last_ok_at") is None:
+            updated = t(self.lang, "updated", age="…")
+        elif now - snap["last_ok_at"] < 5:
+            updated = t(self.lang, "updated_now")
+        else:
+            updated = t(self.lang, "updated", age=fmt_age(now - snap["last_ok_at"], self.lang))
+        return {
+            "lang": self.lang,
+            "icon": icon,
+            "status": status,
+            "status_text": status_text,
+            "cards": [{
+                "card": c,
+                "lines": actions.card_lines(c, self.lang),
+                "open_url": open_by_session.get(c["name"]),
+                "has_service": c["name"] in services,
+            } for c in cards],
+            "cu": cu_model(snap.get("account")),
+            "profiles": list(self.profiles),
+            "last_profile": self.settings.tray_last_profile,
+            "updated_text": updated,
+            "tooltip": actions.status_text(icon, cards, self.lang),
+        }
+
+    def redraw(self):
+        view = self.view()
+        self.tray.setIcon(status_icon(view["icon"]["color"]))
+        self.tray.setToolTip(view["tooltip"][:2000])
+        if self.panel.isVisible():
+            self.panel.render(view)
+
+    def _load_profiles(self):
+        try:
+            self.profiles = load_profiles(profiles_path(self.state.config_path))
+        except ProfileError:
+            self.profiles = {}
+
+    # --- panel ---
+
+    def _activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.toggle_panel()
+
+    def toggle_panel(self):
+        if self.panel.isVisible():
+            self.panel.hide()
+            return
+        self.panel.render(self.view())
+        self._place_panel()
+        self.panel.show()
+        self.panel.raise_()
+        self.panel.activateWindow()
+
+    def _place_panel(self):
+        self.panel.adjustSize()
+        size = self.panel.size()
+        geo = self.tray.geometry()
+        screen = QGuiApplication.screenAt(geo.center()) if geo.isValid() else None
+        screen = screen or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        if geo.isValid() and geo.width() > 0:
+            x = geo.center().x() - size.width() // 2
+            y = geo.top() - size.height() if geo.center().y() > area.center().y() else geo.bottom()
+        else:
+            x, y = area.right() - size.width(), area.bottom() - size.height()
+        x = max(area.left(), min(x, area.right() - size.width()))
+        y = max(area.top(), min(y, area.bottom() - size.height()))
+        self.panel.move(x, y)
+
+    # --- actions ---
+
+    def run_cli(self, args, log: Optional[str] = None) -> subprocess.Popen:
+        return subprocess.Popen([*colab_argv(self.state), *args], **actions.background_kwargs(log))
+
+    def in_terminal(self, args):
+        try:
+            cmd, kw = actions.terminal_command([*colab_argv(self.state), *args])
+            subprocess.Popen(cmd, **kw)
+        except OSError as e:
+            self.notify(str(e), QSystemTrayIcon.Warning)
+
+    def open_service(self, card):
+        p = self.profiles.get(card.get("profile"))
+        if p and p.open:
+            webbrowser.open(p.open)
+
+    def choose_stop(self, card, options) -> Optional[str]:
+        """The stop dialog; returns "job", "runtime" or None (cancel)."""
+        dialog = QDialog(self.panel)
+        dialog.setWindowTitle(t(self.lang, "stop.title", name=card["name"]))
+        box = QVBoxLayout(dialog)
+        box.addWidget(QLabel(t(self.lang, "stop.title", name=card["name"])))
+        radios = []
+        for i, (key, text) in enumerate(options):
+            r = QRadioButton(text)
+            r.setChecked(i == 0)
+            r.setProperty("choice", key)
+            radios.append(r)
+            box.addWidget(r)
+        buttons = QDialogButtonBox()
+        buttons.addButton(QPushButton(t(self.lang, "stop")), QDialogButtonBox.AcceptRole)
+        buttons.addButton(QPushButton(t(self.lang, "cancel")), QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        box.addWidget(buttons)
+        self.panel.keep_open = True
+        try:
+            if dialog.exec() != QDialog.Accepted:
+                return None
+        finally:
+            self.panel.keep_open = False
+        return next(r.property("choice") for r in radios if r.isChecked())
+
+    def ask_stop(self, card):
+        has_service = card["name"] in self.services()
+        choice = self.choose_stop(card, actions.stop_options(card, has_service, self.lang))
+        if not choice:
+            return
+        if choice == "runtime":
+            self.stopping.add(card["name"])
+            for name, child in list(self.children.items()):
+                if child["session"] == card["name"] and child["proc"].poll() is None:
+                    child["proc"].terminate()
+        self.run_cli(actions.stop_argv(card, choice))
+        QTimer.singleShot(3000, self.refresh)
+
+    def confirm(self, title: str, body: str) -> bool:
+        self.panel.keep_open = True
+        try:
+            box = QMessageBox(QMessageBox.Question, title, body, parent=self.panel)
+            start = box.addButton(t(self.lang, "start"), QMessageBox.AcceptRole)
+            box.addButton(t(self.lang, "cancel"), QMessageBox.RejectRole)
+            box.exec()
+            return box.clickedButton() is start
+        finally:
+            self.panel.keep_open = False
+
+    def start_profile(self, name: str):
+        self._load_profiles()
+        p = self.profiles.get(name)
+        if p is None:
+            return
+        rate = (cu_model((self.snapshot or {}).get("account")) or {}).get("rate_cu_per_hour")
+        if not self.confirm(*actions.profile_confirm(name, p, rate, self.lang)):
+            return
+        log = os.path.join(self.log_dir, f"{name}.log")
+        proc = self.run_cli(["profile", "run", name], log=log)
+        self.children[name] = {"proc": proc, "log": log, "session": p.session, "mode": p.mode}
+        self.settings.tray_last_profile = name
+        self.settings_store.save(self.settings)
+        QTimer.singleShot(5000, self.refresh)
+
+    def notify(self, text: str, icon=QSystemTrayIcon.Information):
+        self.tray.showMessage("Colab CLI", text, icon, 8000)
+
+    def open_settings(self):
+        dialog = QDialog(self.panel)
+        dialog.setWindowTitle(t(self.lang, "settings.title"))
+        form = QFormLayout(dialog)
+        interval = QDoubleSpinBox(minimum=10, maximum=3600, decimals=0, value=self.interval)
+        notifications = QCheckBox(checked=self.settings.tray_notifications)
+        language = QComboBox()
+        for key, label in (("auto", t(self.lang, "settings.auto")), ("hu", "Magyar"), ("en", "English")):
+            language.addItem(label, key)
+        language.setCurrentIndex(max(0, language.findData(self.settings.tray_language)))
+        form.addRow(t(self.lang, "settings.interval"), interval)
+        form.addRow(t(self.lang, "settings.notifications"), notifications)
+        form.addRow(t(self.lang, "settings.language"), language)
+        buttons = QDialogButtonBox()
+        buttons.addButton(QPushButton(t(self.lang, "save")), QDialogButtonBox.AcceptRole)
+        buttons.addButton(QPushButton(t(self.lang, "cancel")), QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        self.panel.keep_open = True
+        try:
+            if dialog.exec() != QDialog.Accepted:
+                return
+        finally:
+            self.panel.keep_open = False
+        self.settings.tray_interval = interval.value()
+        self.settings.tray_notifications = notifications.isChecked()
+        self.settings.tray_language = language.currentData()
+        self.settings_store.save(self.settings)
+        self.interval = interval.value()
+        self.timer.setInterval(int(self.interval * 1000))
+        self.lang = pick_language(self.settings.tray_language, QLocale.system().name())
+        self.redraw()
+
+    def quit(self):
+        self.tray.hide()
+        QApplication.instance().quit()
+
+
+def run_tray(state, interval: float) -> int:
+    app = QApplication.instance() or QApplication([])
+    app.setQuitOnLastWindowClosed(False)
+    app.setApplicationName("Colab CLI")
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        import typer
+
+        typer.echo("[colab] This desktop has no system tray (on GNOME, enable an AppIndicator extension).", err=True)
+        return 2
+    tray = TrayApp(state, interval)
+    tray.start()
+    return app.exec()

@@ -273,12 +273,15 @@ def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Opti
     """
     cards = [card_model(e, now, services) for e in snap.get("sessions", [])]
     reasons: List[str] = []
+    codes: List[Dict[str, Any]] = []
     last_ok = snap.get("last_ok_at")
     if last_ok is not None and now - last_ok > 2 * interval:
         minutes = int((now - last_ok) // 60)
         level, text = "stale", f"Stale data (last refresh {minutes} min ago)"
+        codes.append({"code": "stale", "minutes": minutes})
     elif not snap.get("ok"):
         level, text = "error", f"Refresh failed: {snap.get('error')}"
+        codes.append({"code": "refresh_failed", "error": snap.get("error")})
     else:
         failed = [c for c in cards if c["state"] == "failed"]
         stalled = [c for c in cards if c["state"] == "stalled"]
@@ -291,14 +294,18 @@ def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Opti
         if failed:
             level = "error"
             reasons.append("job failed on " + ", ".join(c["name"] for c in failed))
+            codes.append({"code": "job_failed", "names": [c["name"] for c in failed]})
         elif stalled or low or idle_long:
             level = "warning"
             if stalled:
                 reasons.append("no output from " + ", ".join(c["name"] for c in stalled))
+                codes.append({"code": "stalled", "names": [c["name"] for c in stalled]})
             if low:
                 reasons.append(f"low balance (about {cu['hours_left']} h left)")
+                codes.append({"code": "low_balance", "hours": cu["hours_left"]})
             if idle_long:
                 reasons.append("idle for long: " + ", ".join(idle_long))
+                codes.append({"code": "idle_long", "names": idle_long})
         elif any(c["state"] in ("running", "service") for c in cards):
             level = "running"
         elif cards:
@@ -306,7 +313,7 @@ def icon_state(snap: Dict[str, Any], now: float, interval: float, services: Opti
         else:
             level = "none"
         text = summary_text(cards) + ("; " + "; ".join(reasons) if reasons else "")
-    return {"level": level, "color": COLORS[level], "text": text}
+    return {"level": level, "color": COLORS[level], "text": text, "reasons": codes}
 
 
 def summary_text(cards: List[Dict[str, Any]]) -> str:
