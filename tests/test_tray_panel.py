@@ -26,7 +26,7 @@ try:  # no PySide6, or no GL/xkb libraries for Qt on a bare Linux box
     from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton
 
     from colab_cli.tray import app as tray_app
-    from colab_cli.tray.panel import CARD_HEIGHT, MAX_VISIBLE_CARDS
+    from colab_cli.tray.panel import MAX_VISIBLE_CARDS
 except ImportError as e:
     pytest.skip(f"Qt is not usable here: {e}", allow_module_level=True)
 
@@ -107,8 +107,17 @@ def test_many_runtimes_scroll(tray):
     _render(tray, [_entry(f"s{i}", _job()) for i in range(5)])
 
     assert len(tray.panel.cards) == 5
-    assert tray.panel.scroll.height() == MAX_VISIBLE_CARDS * CARD_HEIGHT + (MAX_VISIBLE_CARDS - 1) * 8
+    first = tray.panel.cards[:MAX_VISIBLE_CARDS]
+    assert tray.panel.scroll.height() == sum(c.sizeHint().height() for c in first) + 8 * (len(first) - 1)
     assert tray.panel.cards_host.sizeHint().height() > tray.panel.scroll.height()
+
+
+def test_an_orphan_card_has_no_actions(tray):
+    _render(tray, [_entry("?", None, local=False)])
+    card = tray.panel.cards[0]
+    assert card.findChildren(QPushButton) == []
+    texts = [w.text() for w in card.findChildren(QLabel)]
+    assert "leállítás: colab stop --orphans" in texts
 
 
 def test_no_progress_shows_the_last_output(tray):

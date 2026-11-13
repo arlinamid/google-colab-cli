@@ -41,7 +41,7 @@ from colab_cli.tray.i18n import fmt_number, t
 from colab_cli.tray.icon import logo_pixmap
 
 WIDTH = 400
-CARD_HEIGHT = 168
+CARD_MIN_HEIGHT = 96
 MAX_VISIBLE_CARDS = 3
 
 DOT = {
@@ -66,11 +66,13 @@ QProgressBar { background: #3c4043; border: none; border-radius: 4px; height: 8p
 QProgressBar::chunk { border-radius: 4px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f9ab00, stop:1 #e8710a); }
 QPushButton#action { color: #e8eaed; background: #2b2c2f; border: 1px solid #5f6368; border-radius: 6px; padding: 6px 10px; }
 QPushButton#action:hover { background: #35363a; }
+QPushButton#action:disabled { color: #5f6368; border-color: #3c4043; }
 QPushButton#danger { color: #f28b82; background: #2b2c2f; border: 1px solid #ea4335; border-radius: 6px; padding: 6px 10px; }
 QPushButton#danger:hover { background: #3c2a29; }
 QPushButton#primary { color: #ffffff; background: #e8710a; border: none; border-top-left-radius: 8px; border-bottom-left-radius: 8px; padding: 10px; font-size: 15px; font-weight: 600; }
 QPushButton#primary:hover { background: #f9ab00; }
 QPushButton#primary:disabled { background: #5f6368; color: #bdc1c6; }
+QToolButton#more:disabled { background: #5f6368; border-left: 1px solid #4a4d51; }
 QToolButton#more::menu-indicator { image: none; width: 0; }
 QToolButton#more { color: #ffffff; background: #e8710a; border: none; border-left: 1px solid #b85c00; border-top-right-radius: 8px; border-bottom-right-radius: 8px; padding: 10px; }
 QPushButton#row { color: #e8eaed; background: transparent; border: none; text-align: left; padding: 8px 4px; font-size: 14px; }
@@ -328,13 +330,16 @@ class Panel(QWidget):
             frame = self._card(item, lang)
             self.cards.append(frame)
             self.cards_layout.addWidget(frame)
-        shown = max(1, min(len(view["cards"]), MAX_VISIBLE_CARDS))
-        self.scroll.setFixedHeight(shown * CARD_HEIGHT + (shown - 1) * 8 if view["cards"] else 40)
+        # As tall as the first MAX_VISIBLE_CARDS cards; more scroll.
+        visible = self.cards[:MAX_VISIBLE_CARDS]
+        height = sum(c.sizeHint().height() for c in visible) + 8 * max(len(visible) - 1, 0)
+        self.scroll.setFixedHeight(height if visible else 40)
 
     def _card(self, item, lang) -> QFrame:
         card, lines = item["card"], item["lines"]
         frame = QFrame(objectName="card")
-        frame.setFixedHeight(CARD_HEIGHT)
+        frame.setMinimumHeight(CARD_MIN_HEIGHT)
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         box = QVBoxLayout(frame)
         box.setContentsMargins(14, 10, 14, 10)
         top = QHBoxLayout()
@@ -358,9 +363,14 @@ class Panel(QWidget):
             bar_row.addWidget(bar, 1)
             bar_row.addWidget(_label(f"{card['percent']:.0f}%"))
             box.addLayout(bar_row)
-        detail = _label(lines["detail"] or "", "muted")
-        detail.setObjectName("detail")
-        box.addWidget(detail)
+        if lines["detail"]:
+            detail = _label(lines["detail"], "muted")
+            detail.setObjectName("detail")
+            detail.setWordWrap(True)
+            box.addWidget(detail)
+        if not card["local"]:
+            # Unknown to this CLI: no session name to act on (see the hint).
+            return frame
         buttons = QHBoxLayout()
         enabled = card["local"]
         for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked)):

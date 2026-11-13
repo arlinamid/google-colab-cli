@@ -154,6 +154,11 @@ def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional
         "sessions": prev.get("sessions", []),
     }
     try:
+        # State caches the local sessions for the length of one command; the
+        # tray runs for hours, so read sessions.json again on every refresh
+        # (a session created after the tray started is not an orphan).
+        if hasattr(state, "_sessions"):
+            state._sessions = None
         sessions, assignments = state.sync_sessions()
         by_endpoint = {s.endpoint: s for s in sessions.values()}
         prev_by_endpoint = {e["endpoint"]: e for e in prev.get("sessions", [])}

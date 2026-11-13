@@ -246,3 +246,30 @@ def test_stop_when_done_targets(world):
     second = _snap(world, now=NOW + 30, prev=first)
     assert tm.sessions_to_stop(second, set()) == ["train"]
     assert tm.sessions_to_stop(second, {"train"}) == []  # already asked to stop
+
+
+def test_a_session_created_after_the_tray_started_is_not_an_orphan(world, mocker):
+    """The CLI state caches the local sessions for one command; the tray
+    lives for hours, so each snapshot must read them again."""
+    from colab_cli.common import State
+
+    st = State()
+    st._client = world.state.client
+    st._store = MagicMock()
+    st._history = MagicMock()
+    st._store.list.return_value = {}
+    world.state.client.list_assignments.return_value = []
+    first = tm.collect_snapshot(st, now=NOW)
+    assert first["sessions"] == []
+
+    late = SessionState(name="late", token="t", url="u", endpoint="ep7")
+    st._store.list.return_value = {"late": late}
+    a = _assignment("ep7")
+    a.runtime_proxy_info = SimpleNamespace(token="t2", url="u2", expires_at=lambda: None)
+    world.state.client.list_assignments.return_value = [a]
+    mocker.patch.object(tm, "ContentsClient", return_value=FakeFiles({}, []))
+    second = tm.collect_snapshot(st, prev=first, now=NOW + 30)
+
+    assert second["ok"], second["error"]
+    assert [s["name"] for s in second["sessions"]] == ["late"]
+    assert second["sessions"][0]["local"] is True

@@ -63,7 +63,8 @@ def test_card_without_progress_names_the_last_output():
 
 def test_orphan_card_says_so():
     lines = a.card_lines(_card(local=False, name="?", state="idle", job_id=None), "en")
-    assert "not started from this computer" in lines["subtitle"]
+    assert "not in the local session list" in lines["subtitle"]
+    assert lines["detail"].endswith("stop it with: colab stop --orphans")
 
 
 def test_stop_options_say_what_stops():
