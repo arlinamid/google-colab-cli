@@ -126,3 +126,10 @@ def test_terminal_command(system, found, first):
 def test_terminal_command_without_a_terminal():
     with pytest.raises(FileNotFoundError):
         a.terminal_command(["colab"], system="linux", which=lambda name: None)
+
+
+def test_forward_line():
+    card = _card(state="service", percent=None, epoch=None, eta_s=None, metric=None, job_id=None,
+                 forwards=[{"local_port": 8188, "listening": True}, {"local_port": 7860, "listening": False}])
+    assert a.card_lines(card, "hu")["detail"] == "továbbítás: 8188, 7860 (nem válaszol)"
+    assert a.card_lines(card, "hu")["subtitle"] == "NVIDIA T4 · Szolgáltatás"

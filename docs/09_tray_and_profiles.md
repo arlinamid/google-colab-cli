@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Open port forwards are detected (`forwards.py`): the ssh processes that `colab forward` / `colab ssh -L` start (any tool, any CLI version) are found in the local process list, matched by session name and sessions file, and their local ports checked with a TCP connect. A runtime behind a forward is a service with an Open button. Live: the forward of a web UI (started by an older global `colab`) showed as a T4 service with `forward 8188`. Also fixed after the first try on a real desktop: sessions.json is read again on every refresh (a runtime created after the tray started was shown as an orphan), orphan cards have no actions, dialogs open on top of the panel.
 2026-11-13: Initial design and implementation: progress over the whole run (`overall_percent`, epochs, notebook cells), notebooks as background jobs, `colab exec --var`, run profiles (`profiles.toml`, `colab profile`), the tray snapshot (`tray_model.py`, `colab tray --snapshot`) and the Qt tray panel (`colab tray`, the `[tray]` extra). Live: `integration/repro_tray_profiles/test.sh` (job profile with a snapshot while it runs and after, a notebook job with a `!` cell, a kernel profile that reuses the runtime and sets vars) and a kernel profile that forwards a web server (ready check through `colab forward`). The panel is checked offscreen in tests; on a real desktop it was not yet checked by a person.
 ---
 
@@ -148,6 +149,21 @@ name, endpoint, hardware, `local`, `profile`, `stop_when_done`, `running`,
 `colab tray --snapshot [--json]` prints the snapshot (with `icon`, `cards`
 and `cu`) and exits; it needs no GUI, so scripts, agents and the live test
 use it.
+
+### Port forwards
+
+`forwards.scan_forwards()` finds the forwards open on this computer without
+asking the runtime: `colab forward` and `colab ssh -L` run
+`ssh -o ProxyCommand="... ssh --proxy-mode -s NAME ..." -L LOCAL:HOST:REMOTE`,
+so the ssh processes are listed (Windows: `Get-CimInstance Win32_Process`,
+Linux: `/proc/*/cmdline`, macOS: `ps`), parsed for the session name, the
+`--config` of the ProxyCommand and the `-L` values, and each local port is
+checked with a TCP connect to 127.0.0.1. Only forwards of the same sessions
+file count. Each snapshot entry gets `forwards` (`local_port`, `remote`,
+`listening`); the card becomes a **service** with "forward: 8188" and an
+**Open** button (`http://127.0.0.1:PORT`, or the profile's `open` URL), and
+a forwarded runtime is not warned about as idle (the forward keeps it alive).
+Whichever tool started the forward does not matter, nor its CLI version.
 
 ## 4. The panel (`tray/`, the `[tray]` extra)
 

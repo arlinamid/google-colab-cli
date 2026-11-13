@@ -55,6 +55,12 @@ def card_lines(card: Dict[str, Any], lang: str) -> Dict[str, Optional[str]]:
         parts.append(t(lang, "last_output", age=fmt_age(age, lang)) if age is not None else t(lang, "no_output_yet"))
     if card["diagnosis"]:
         parts.append(card["diagnosis"])
+    if card.get("forwards"):
+        ports = [
+            str(f["local_port"]) if f.get("listening") else t(lang, "not_answering", port=f["local_port"])
+            for f in card["forwards"]
+        ]
+        parts.append(t(lang, "forwarding", ports=", ".join(ports)))
     if not card["local"]:
         parts.append(t(lang, "orphan_hint"))
     return {"subtitle": subtitle, "metric": metric, "detail": " · ".join(parts) or None}

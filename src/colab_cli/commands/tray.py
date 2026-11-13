@@ -87,6 +87,8 @@ def _print_snapshot(snap, now: float, interval: float) -> None:
             line += f"  {c['metric']['name']}={c['metric']['value']}"
         if c["diagnosis"]:
             line += f"  ({c['diagnosis']})"
+        for f in c.get("forwards") or []:
+            line += f"  forward {f['local_port']}" + ("" if f.get("listening") else " (not answering)")
         typer.echo(line)
     cu = cu_model(snap.get("account"))
     if cu:

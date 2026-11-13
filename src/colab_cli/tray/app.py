@@ -175,6 +175,9 @@ class TrayApp(QObject):
             p = self.profiles.get(e.get("profile"))
             if p and p.open:
                 open_by_session[e["name"]] = p.open
+        for c in cards:
+            if c.get("open_url") and c["name"] not in open_by_session:
+                open_by_session[c["name"]] = c["open_url"]
         status = "stale" if icon["level"] == "stale" else ("error" if not snap.get("ok") else "connected")
         status_text = {"stale": t(self.lang, "stale"), "error": t(self.lang, "refresh_failed"),
                        "connected": t(self.lang, "connected")}[status]
@@ -261,8 +264,9 @@ class TrayApp(QObject):
 
     def open_service(self, card):
         p = self.profiles.get(card.get("profile"))
-        if p and p.open:
-            webbrowser.open(p.open)
+        url = (p.open if p and p.open else None) or card.get("open_url")
+        if url:
+            webbrowser.open(url)
 
     def choose_stop(self, card, options) -> Optional[str]:
         """The stop dialog; returns "job", "runtime" or None (cancel)."""

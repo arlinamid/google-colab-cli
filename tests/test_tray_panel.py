@@ -255,3 +255,15 @@ def test_dialogs_open_on_top_of_the_panel_without_its_style(tray, mocker):
     assert seen["flags"] & Qt.WindowStaysOnTopHint
     assert seen["parent"] is None
     assert seen["keep_open"] is True and tray.panel.keep_open is False
+
+
+def test_a_forwarded_runtime_gets_an_open_button(tray, mocker):
+    opened = mocker.patch.object(tray_app.webbrowser, "open")
+    entry = _entry("webui", None, forwards=[{"local_port": 8188, "remote": "localhost:8188", "listening": True}])
+    view = _render(tray, [entry])
+
+    card = tray.panel.cards[0]
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Megnyitás", "Leállítás"]
+    assert "továbbítás: 8188" in [w.text() for w in card.findChildren(QLabel)]
+    tray.open_service(view["cards"][0]["card"])
+    opened.assert_called_once_with("http://127.0.0.1:8188")

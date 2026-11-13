@@ -31,6 +31,7 @@ import time
 from typing import Any, Dict, List, Optional, Set
 
 from colab_cli.contents import ContentsClient
+from colab_cli.forwards import scan_forwards
 from colab_cli.jobs import (
     DEFAULT_STALL_AFTER,
     JOBS_DIR,
@@ -135,8 +136,12 @@ def _session_entry(s, assignment, prev_entry, now: float) -> Dict[str, Any]:
     return entry
 
 
-def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional[float] = None) -> Dict[str, Any]:
+def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional[float] = None,
+                     forwards: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
     """One picture of the account, the runtimes and their newest jobs.
+
+    ``forwards`` (session -> open port forwards on this computer) defaults to
+    scan_forwards(); a runtime behind a forward shows as a service.
 
     On a failed refresh the previous data is kept, with ``ok`` False and the
     error; ``last_ok_at`` says how old the data is.
@@ -162,9 +167,13 @@ def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional
         sessions, assignments = state.sync_sessions()
         by_endpoint = {s.endpoint: s for s in sessions.values()}
         prev_by_endpoint = {e["endpoint"]: e for e in prev.get("sessions", [])}
+        if forwards is None:
+            forwards = scan_forwards(getattr(state, "config_path", None))
         entries = []
         for a in assignments:
-            entries.append(_session_entry(by_endpoint.get(a.endpoint), a, prev_by_endpoint.get(a.endpoint), now))
+            entry = _session_entry(by_endpoint.get(a.endpoint), a, prev_by_endpoint.get(a.endpoint), now)
+            entry["forwards"] = forwards.get(entry["name"], []) if entry["local"] else []
+            entries.append(entry)
         account = snap["account"]
         if account is None or now - account.get("fetched_at", 0) >= ACCOUNT_EVERY_SEC:
             info = state.client.get_consumption_user_info()
@@ -201,7 +210,12 @@ def card_model(entry: Dict[str, Any], now: float, services: Optional[Set[str]] =
         "eta_s": None,
         "last_output_age_s": None,
         "diagnosis": None,
+        "forwards": entry.get("forwards") or [],
+        "open_url": None,
     }
+    listening = [f["local_port"] for f in card["forwards"] if f.get("listening")]
+    if listening:
+        card["open_url"] = f"http://127.0.0.1:{listening[0]}"
     if job:
         state = job["state"]
         card["job_id"] = job["id"]
@@ -226,7 +240,7 @@ def card_model(entry: Dict[str, Any], now: float, services: Optional[Set[str]] =
         card["cell"] = (activity.get("cell"), total, activity.get("label"))
         if total:
             card["percent"] = round(100 * (activity.get("cell", 1) - 1) / total, 1)
-    if card["state"] == "idle" and services and entry["name"] in services:
+    if card["state"] == "idle" and (card["forwards"] or (services and entry["name"] in services)):
         card["state"] = "service"
     return card
 

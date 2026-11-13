@@ -87,6 +87,7 @@ def world(mocker):
         paid_compute_units_balance=87.0, consumption_rate_hourly=1.9, assignments_count=3)
     by_session = {"train": FakeFiles(files, calls), "idle": FakeFiles({}, calls)}
     mocker.patch.object(tm, "ContentsClient", side_effect=lambda s: by_session[s.name])
+    mocker.patch.object(tm, "scan_forwards", return_value={})
     return SimpleNamespace(state=st, calls=calls, files=files, train=train, idle=idle)
 
 
@@ -273,3 +274,18 @@ def test_a_session_created_after_the_tray_started_is_not_an_orphan(world, mocker
     assert second["ok"], second["error"]
     assert [s["name"] for s in second["sessions"]] == ["late"]
     assert second["sessions"][0]["local"] is True
+
+
+def test_a_runtime_behind_a_forward_is_a_service(world):
+    snap = tm.collect_snapshot(world.state, now=NOW, forwards={
+        "idle": [{"local_port": 8188, "remote": "localhost:8188", "listening": True}],
+        "?": [{"local_port": 1, "remote": "x", "listening": True}],
+    })
+    idle = snap["sessions"][1]
+    assert idle["forwards"][0]["local_port"] == 8188
+    assert snap["sessions"][2]["forwards"] == []  # orphans have no name to match
+    card = tm.card_model(idle, now=NOW)
+    assert card["state"] == "service" and card["open_url"] == "http://127.0.0.1:8188"
+
+    down = tm.card_model({**idle, "forwards": [{"local_port": 8188, "remote": "x", "listening": False}]}, now=NOW)
+    assert down["state"] == "service" and down["open_url"] is None
