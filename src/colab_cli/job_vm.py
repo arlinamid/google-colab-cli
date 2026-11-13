@@ -21,10 +21,11 @@ colab_cli import. tests/test_job_vm.py runs them locally.
 Files in the job folder (/content/.colab-jobs/<id>/):
   spec.json      id, name, argv, cwd (written by the CLI; argv only, no env)
   runner.py      RUNNER_SOURCE: runs argv, records everything below
+  notebook.py    NOTEBOOK_SOURCE (notebook jobs): runs the cells of cells.json
   lib/colab_feedback.py  FEEDBACK_SOURCE, on the job's PYTHONPATH
   output.log     everything the job printed (stdout and stderr)
   tail.txt       its last 200 lines, so status reads stay small
-  status.json    state, pid, times, exit_code, last_output_at, progress
+  status.json    state, pid, times, exit_code, last_output_at, progress, cell
   metrics.jsonl  rows from colab_feedback.report()
   notes.jsonl    rows from colab_feedback.note()
   stop           created by `colab job stop`; the runner then ends the job
@@ -50,6 +51,15 @@ _PCT = re.compile(r"(\d{1,3})%\|")
 _COUNT = re.compile(r"\|\s*(\d+)/(\d+)\s")
 _ETA = re.compile(r"<(?:(\d+):)?(\d+):(\d+)")
 _LINE_BREAK = re.compile(r"(\r\n|\n|\r)")
+_CELL = re.compile(r"^##colab-cell (\d+)/(\d+)(?: (.*))?$")
+
+
+def parse_cell(line):
+    """The cell a notebook job starts, from its marker line, or None."""
+    m = _CELL.match(line)
+    if not m:
+        return None
+    return {"index": int(m.group(1)), "total": int(m.group(2)), "label": (m.group(3) or "").strip()}
 
 
 def parse_progress(segment):
@@ -92,6 +102,7 @@ class Job:
             "exit_code": None,
             "last_output_at": None,
             "progress": None,
+            "cell": None,
             "stop_reason": None,
         }
         self.tail = collections.deque(maxlen=TAIL_LINES)
@@ -113,6 +124,10 @@ class Job:
             self.dirty = True
             for piece in _LINE_BREAK.split(text):
                 if piece in ("\n", "\r\n"):
+                    cell = parse_cell(self.current)
+                    if cell:
+                        self.status["cell"] = cell
+                        self.status["progress"] = None  # a bar belongs to one cell
                     self.tail.append(self.current)
                     self.current = ""
                 elif piece == "\r":
@@ -209,6 +224,81 @@ if __name__ == "__main__":
     main(sys.argv[1])
 '''
 
+NOTEBOOK_SOURCE = r'''"""colab job notebook driver: runs a notebook's code cells in order.
+
+argv: cells.json [ARGS...]. cells.json is {"name": ..., "cells": [{"label",
+"source"}]} (or the bare list). Each cell starts with a marker line,
+"##colab-cell I/N LABEL", that the runner turns into status["cell"]. The cells
+run in one IPython shell, so `!cmd`, `%magic` and `%%cell` magics work; the
+first cell that raises ends the job with exit code 1. Without IPython (or with
+COLAB_NOTEBOOK_PLAIN=1) the cells run as plain Python.
+"""
+import json
+import os
+import sys
+import traceback
+
+
+def _ipython_runner():
+    try:
+        from IPython.core.interactiveshell import InteractiveShell
+    except ImportError:
+        print("[colab] IPython is not available; running the cells as plain Python.", flush=True)
+        return None
+    shell = InteractiveShell.instance()
+    for scheme in ("nocolor", "NoColor"):
+        try:
+            shell.run_line_magic("colors", scheme)
+            break
+        except Exception:
+            continue
+    # "Traceback (most recent call last):", the form `colab job` diagnoses.
+    shell.InteractiveTB.set_mode("Plain")
+
+    def run(source, label):
+        result = shell.run_cell(source, store_history=True)
+        sys.stdout.flush()
+        return result.success
+
+    return run
+
+
+def _plain_runner():
+    namespace = {"__name__": "__main__"}
+
+    def run(source, label):
+        try:
+            exec(compile(source, "<" + label + ">", "exec"), namespace)
+            return True
+        except Exception:
+            sys.stdout.flush()
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            return False
+
+    return run
+
+
+def main(cells_path, args):
+    with open(cells_path, encoding="utf-8") as f:
+        data = json.load(f)
+    cells = data["cells"] if isinstance(data, dict) else data
+    name = data.get("name") if isinstance(data, dict) else None
+    sys.argv = [name or "notebook.ipynb", *args]
+    run = None if os.environ.get("COLAB_NOTEBOOK_PLAIN") else _ipython_runner()
+    run = run or _plain_runner()
+    for i, cell in enumerate(cells, 1):
+        label = cell.get("label") or ""
+        print(("##colab-cell %d/%d %s" % (i, len(cells), label)).rstrip(), flush=True)
+        if not run(cell["source"], label or "cell %d" % i):
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1], sys.argv[2:]))
+'''
+
 FEEDBACK_SOURCE = r'''"""Report progress from a `colab job`: from colab_feedback import report, note.
 
 Outside a job (no COLAB_JOB_DIR) both functions do nothing, so the same
@@ -229,7 +319,12 @@ def _append(name, row):
 
 
 def report(step=None, **metrics):
-    """Record metrics, e.g. report(step=120, loss=0.41, val_acc=0.88)."""
+    """Record metrics, e.g. report(step=120, loss=0.41, val_acc=0.88).
+
+    epoch= and epochs= (epoch counted from 1), or step= and total=, also tell
+    `colab job status` how far the whole run is ("overall"), e.g.
+    report(epoch=2, epochs=5, loss=0.31).
+    """
     row = {"t": time.time()}
     if step is not None:
         row["step"] = step

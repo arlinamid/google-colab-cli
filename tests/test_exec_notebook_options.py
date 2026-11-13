@@ -203,3 +203,39 @@ def test_python_file_is_read_as_utf8(tmp_path, mock_runtime_class, session):
 
     assert result.exit_code == 0, result.output
     assert ran == ['print("Telepítés kész →")\n']
+
+
+def test_exec_records_the_running_cell_for_the_tray(tmp_path, mock_runtime_class, session, mock_common_state):
+    """`activity` names the cell being run, so `colab status` and the tray can
+    show it from the local state; it is cleared at the end."""
+    seen = []
+
+    def execute_code(code, output_hook=None, **kwargs):
+        if not code.startswith("import os; os.makedirs('/content'"):
+            seen.append(dict(session.activity))
+        return [{"output_type": "stream", "name": "stdout", "text": "ok\n"}]
+
+    mock_runtime_class.return_value.execute_code.side_effect = execute_code
+    path = _write_nb(tmp_path, "#@title One\nx = 1", "print(x)")
+
+    result = runner.invoke(app, ["exec", "-s", "s1", "-f", path])
+
+    assert result.exit_code == 0, result.output
+    assert [(a["cell"], a["total"], a["label"]) for a in seen] == [
+        (1, 2, "cell 1 (One)"), (2, 2, "cell 2"),
+    ]
+    assert all(a["file"] == path and a["started_at"] for a in seen)
+    assert session.activity is None
+
+
+def test_status_shows_the_running_cell(mock_common_state):
+    from colab_cli.state import SessionState
+
+    s = SessionState(name="s1", token="t", url="u", endpoint="e", running="exec(nb.ipynb)",
+                     activity={"file": "nb.ipynb", "cell": 3, "total": 12, "label": "cell 3 (Setup)",
+                               "started_at": "2026-11-13T10:00:00"})
+    mock_common_state.sync_sessions.return_value = ({"s1": s}, [])
+
+    result = runner.invoke(app, ["status"])
+
+    assert "Running: nb.ipynb, cell 3/12 (cell 3 (Setup)) since 2026-11-13T10:00:00" in result.output

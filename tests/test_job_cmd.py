@@ -272,3 +272,42 @@ def test_status_json_has_a_cost_estimate(files, mock_common_state):
     result = runner.invoke(app, ["job", "status", "-s", "s1", "j-20261112-090000-0000", "--json"])
 
     assert json.loads(result.stdout)["cost"]["used_cu_estimate"] == 0.1
+
+
+def test_start_a_notebook(files, kernel, tmp_path):
+    import base64
+
+    import nbformat
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell("#@title Setup\nx = 1"), nbformat.v4.new_code_cell("print(x)")]
+    path = tmp_path / "train.ipynb"
+    nbformat.write(nb, str(path))
+
+    result = runner.invoke(app, ["job", "start", "-s", "s1", "-f", str(path), "--", "--epochs", "3"])
+
+    assert result.exit_code == 0, result.output
+    code = kernel.execute_code.call_args.args[0]
+    assert "'{dir}/notebook.py', '{dir}/cells.json', '--epochs', '3'" in code
+    files_literal = code.split("for _name, _data in ")[1].split(".items()")[0]
+    sent = {k: base64.b64decode(v).decode() for k, v in eval(files_literal).items()}
+    assert "notebook.py" in sent and "script.py" not in sent
+    cells = json.loads(sent["cells.json"])
+    assert cells["name"] == "train.ipynb"
+    assert [c["label"] for c in cells["cells"]] == ["cell 1 (Setup)", "cell 2"]
+    assert "Started job train-" in result.output
+
+
+def test_status_human_shows_the_cell_epoch_and_overall_progress(files):
+    base = f"{JOBS_DIR}/nb-20261112-090000-0000"
+    _put_job(files, "nb-20261112-090000-0000")
+    st = json.loads(files.files[f"{base}/status.json"])
+    st["cell"] = {"index": 2, "total": 4, "label": "cell 2 (Train)"}
+    files.files[f"{base}/status.json"] = json.dumps(st)
+    files.files[f"{base}/metrics.jsonl"] = json.dumps({"t": 1, "epoch": 2, "epochs": 5, "loss": 0.5}) + "\n"
+
+    result = runner.invoke(app, ["job", "status", "-s", "s1", "nb-20261112-090000-0000"])
+
+    assert "cell 2/4: cell 2 (Train)" in result.output
+    assert "epoch 2/5" in result.output
+    assert "overall: 30.0%" in result.output

@@ -16,7 +16,7 @@ import contextlib
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional, Tuple, Iterator, IO
+from typing import Any, Dict, Optional, Tuple, Iterator, IO
 
 import filelock
 from pydantic import BaseModel
@@ -35,6 +35,14 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    # What a foreground `colab exec` is running now: file, cell (from 1),
+    # total, label and started_at (ISO). Read by `colab status` and the tray
+    # without touching the runtime.
+    activity: Optional[Dict[str, Any]] = None
+    # Set by `colab profile run`: the profile, and whether the tray stops the
+    # runtime once its job has ended.
+    profile: Optional[str] = None
+    stop_when_done: Optional[bool] = None
 
 
 class Settings(BaseModel):

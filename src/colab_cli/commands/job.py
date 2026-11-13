@@ -29,7 +29,7 @@ from typing import List, Optional
 import typer
 from typing_extensions import Annotated
 
-from colab_cli.commands.execution import SECRET_HELP, _parse_env_vars, read_script
+from colab_cli.commands.execution import SECRET_HELP, _parse_env_vars
 from colab_cli.contents import ContentsClient
 from colab_cli.cost import CostMeter
 from colab_cli.jobs import (
@@ -38,6 +38,7 @@ from colab_cli.jobs import (
     RUNNING_STATES,
     build_start_code,
     job_argv,
+    job_files,
     job_record,
     new_job_id,
     new_lines,
@@ -154,8 +155,15 @@ def _print_human(rec, show_tail=True) -> None:
     if rec["silent_s"] is not None:
         head += f", last output {_duration(rec['silent_s'])} ago"
     typer.echo(head)
+    if rec.get("cell"):
+        cell = rec["cell"]
+        typer.echo(f"  cell {cell['index']}/{cell['total']}: {cell['label']}".rstrip(": "))
+    if rec.get("epoch"):
+        typer.echo(f"  epoch {rec['epoch']['current']}/{rec['epoch']['total']}")
     if rec["progress"]:
         typer.echo(f"  progress: {_progress_text(rec['progress'])}")
+    if rec.get("overall_percent") is not None and rec["state"] in RUNNING_STATES:
+        typer.echo(f"  overall: {rec['overall_percent']}%")
     if rec["metrics"]["last"]:
         typer.echo("  metrics:  " + " ".join(f"{k}={v}" for k, v in rec["metrics"]["last"].items()))
     if show_tail and rec["tail"]:
@@ -174,7 +182,17 @@ def _print_human(rec, show_tail=True) -> None:
 )
 def start(
     session: SessionOpt = None,
-    file: Annotated[Optional[str], typer.Option("-f", "--file", help="Local Python script to run as the job.")] = None,
+    file: Annotated[
+        Optional[str],
+        typer.Option(
+            "-f", "--file",
+            help=(
+                "Local Python script or notebook (.ipynb) to run as the job. A "
+                "notebook's code cells run in order in IPython; `colab job "
+                "status` shows the cell it is in."
+            ),
+        ),
+    ] = None,
     name: Annotated[Optional[str], typer.Option("--name", help="Name at the start of the job id.")] = None,
     env: Annotated[
         Optional[List[str]],
@@ -218,18 +236,32 @@ def start(
     if file and not os.path.isfile(file):
         typer.echo(f"[colab] File not found: '{file}'", err=True)
         raise typer.Exit(2)
-    source = read_script(file) if file else None
+    payload = job_files_or_exit(file) if file else None
     argv = job_argv(file, None if file else cmd, (cmd or []) if file else [])
     env_vars = _parse_env_vars(env)
     state, session_name, s = _session(session)
     env_vars.update(resolve_secrets(secret, state.history))
     launch_job(
-        state, session_name, s, file=file, source=source, argv=argv,
+        state, session_name, s, file=file, files=payload, argv=argv,
         env_vars=env_vars, name=name, budget=budget, json_output=json_output,
     )
 
 
-def launch_job(state, session_name, s, *, file, source, argv, env_vars, name, budget, json_output):
+def job_files_or_exit(file: str) -> dict:
+    """job_files() for a local script or notebook, exiting 2 if it cannot be read.
+
+    Called before anything is allocated or started.
+    """
+    try:
+        return job_files(file)
+    except typer.Exit:
+        raise
+    except Exception as e:  # nbformat: not JSON, not a notebook
+        typer.echo(f"[colab] Cannot read the notebook '{file}': {e}", err=True)
+        raise typer.Exit(2)
+
+
+def launch_job(state, session_name, s, *, file, files, argv, env_vars, name, budget, json_output):
     """Start the job on session ``s`` and report it; used by `colab run --detach` too."""
     label = name or (os.path.splitext(os.path.basename(file))[0] if file else os.path.basename(argv[0]))
     job_id = new_job_id(label)
@@ -245,7 +277,7 @@ def launch_job(state, session_name, s, *, file, source, argv, env_vars, name, bu
     try:
         outputs = runtime.execute_code(
             build_start_code(
-                job_id, name=label, argv=argv, env=env_vars, script_source=source,
+                job_id, name=label, argv=argv, env=env_vars, files=files,
                 max_seconds=max_seconds,
             )
         )

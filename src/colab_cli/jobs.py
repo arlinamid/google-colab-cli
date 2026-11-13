@@ -28,12 +28,14 @@ import secrets
 from typing import Any, Dict, List, Optional
 
 from colab_cli.diagnosis import _result, diagnose, diagnose_failure
-from colab_cli.job_vm import FEEDBACK_SOURCE, RUNNER_SOURCE
+from colab_cli.job_vm import FEEDBACK_SOURCE, NOTEBOOK_SOURCE, RUNNER_SOURCE
 from colab_cli.results import SCHEMA
 
 JOBS_DIR = "/content/.colab-jobs"
 RUNNING_STATES = ("starting", "running", "stopping")
 DEFAULT_STALL_AFTER = 600.0
+# report() fields that count progress rather than measure the model.
+_COUNTERS = ("t", "step", "total", "epoch", "epochs")
 
 _TRACEBACK = "Traceback (most recent call last):"
 _EXCEPTION_LINE = re.compile(r"^([A-Za-z_][\w.]*)(?::\s?(.*))?$")
@@ -52,11 +54,44 @@ def job_argv(file: Optional[str], cmd: Optional[List[str]], args: List[str]) -> 
     A script runs with the kernel's Python; one command string runs in bash;
     several words are an exact argv (like `colab ssh -- CMD`).
     """
+    if file and is_notebook(file):
+        return ["{python}", "-u", "{dir}/notebook.py", "{dir}/cells.json", *args]
     if file:
         return ["{python}", "-u", "{dir}/script.py", *args]
     if len(cmd) == 1:
         return ["bash", "-c", cmd[0]]
     return list(cmd)
+
+
+def is_notebook(file: Optional[str]) -> bool:
+    return bool(file) and file.lower().endswith(".ipynb")
+
+
+def notebook_cells(path: str) -> List[Dict[str, str]]:
+    """The notebook's non-empty code cells as ``{"label", "source"}``.
+
+    Labels are the ones `colab exec` uses (``cell 3 (Setup)``: code cells
+    counted from 1, plus the ``#@title``), so a notebook job reports the same
+    names.
+    """
+    import nbformat
+
+    from colab_cli.notebook import code_cells
+
+    nb = nbformat.read(path, as_version=4)
+    return [{"label": c.label, "source": c.source} for c in code_cells(nb) if c.source.strip()]
+
+
+def job_files(file: str) -> Dict[str, str]:
+    """The files a script or notebook job needs in its folder, by name."""
+    import os
+
+    if is_notebook(file):
+        cells = {"name": os.path.basename(file), "cells": notebook_cells(file)}
+        return {"notebook.py": NOTEBOOK_SOURCE, "cells.json": json.dumps(cells)}
+    from colab_cli.commands.execution import read_script
+
+    return {"script.py": read_script(file)}
 
 
 def _b64(text: str) -> str:
@@ -70,18 +105,23 @@ def build_start_code(
     argv: List[str],
     env: Dict[str, str],
     script_source: Optional[str] = None,
+    files: Optional[Dict[str, str]] = None,
     jobs_dir: str = JOBS_DIR,
     max_seconds: Optional[float] = None,
 ) -> str:
     """Kernel code that creates the job folder and starts the runner.
 
-    The spec file on disk holds argv only; ``env`` (which may carry secrets
-    from --secret) goes straight into the process environment.
+    ``files`` (name -> text, e.g. from job_files()) are written next to the
+    runner; ``script_source`` is short for ``files={"script.py": ...}``. The
+    spec file on disk holds argv only; ``env`` (which may carry secrets from
+    --secret) goes straight into the process environment.
     """
     folder = f"{jobs_dir}/{job_id}"
-    files = {"runner.py": _b64(RUNNER_SOURCE), "lib/colab_feedback.py": _b64(FEEDBACK_SOURCE)}
+    extra = dict(files or {})
     if script_source is not None:
-        files["script.py"] = _b64(script_source)
+        extra["script.py"] = script_source
+    files = {"runner.py": _b64(RUNNER_SOURCE), "lib/colab_feedback.py": _b64(FEEDBACK_SOURCE)}
+    files.update({name_: _b64(text) for name_, text in extra.items()})
     spec = {"id": job_id, "name": name, "argv": argv, "cwd": "/content"}
     if max_seconds:
         spec["max_seconds"] = round(max_seconds, 1)
@@ -120,13 +160,42 @@ def metric_trend(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
     trend: Dict[str, Dict[str, float]] = {}
     for row in rows:
         for key, value in row.items():
-            if key in ("t", "step") or isinstance(value, bool) or not isinstance(value, (int, float)):
+            if key in _COUNTERS or isinstance(value, bool) or not isinstance(value, (int, float)):
                 continue
             t = trend.setdefault(key, {"first": value, "last": value, "min": value, "max": value})
             t["last"] = value
             t["min"] = min(t["min"], value)
             t["max"] = max(t["max"], value)
     return trend
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def overall_percent(status: Dict[str, Any], last: Dict[str, Any]) -> Optional[float]:
+    """How far the whole run is, 0-100, or None when nothing tells.
+
+    In order: ``report(epoch=, epochs=)`` (epoch counted from 1, the bar
+    giving the part of the running epoch), ``report(step=, total=)``, the
+    notebook cell (with the bar inside it), the progress bar alone.
+    """
+    if status.get("state") == "succeeded":
+        return 100.0
+    bar = (status.get("progress") or {}).get("percent")
+    inner = (bar or 0) / 100
+    cell = status.get("cell") or {}
+    if _number(last.get("epoch")) and _number(last.get("epochs")) and last["epochs"] > 0:
+        pct = (last["epoch"] - 1 + inner) / last["epochs"] * 100
+    elif _number(last.get("step")) and _number(last.get("total")) and last["total"] > 0:
+        pct = last["step"] / last["total"] * 100
+    elif cell.get("total"):
+        pct = (cell["index"] - 1 + inner) / cell["total"] * 100
+    elif bar is not None:
+        pct = bar
+    else:
+        return None
+    return round(min(max(pct, 0.0), 100.0), 1)
 
 
 def diagnose_log(tail: str, *, session: Optional[str], file: Optional[str] = None) -> Dict:
@@ -188,6 +257,10 @@ def job_record(
     elif stalled:
         diagnosis = _stalled(status.get("id"), session, silent)
     last = {k: v for k, v in (metrics[-1] if metrics else {}).items() if k != "t"}
+    age = (now - last_output) if last_output else None
+    epoch = None
+    if _number(last.get("epoch")) and _number(last.get("epochs")):
+        epoch = {"current": last["epoch"], "total": last["epochs"]}
     return {
         "schema": SCHEMA,
         "type": "job",
@@ -204,7 +277,11 @@ def job_record(
         "elapsed_s": round(((ended or now) - started), 1) if started else None,
         "silent_s": round(silent, 1) if silent is not None else None,
         "stalled": stalled,
+        "last_output_age_s": round(age, 1) if age is not None else None,
         "progress": status.get("progress"),
+        "cell": status.get("cell"),
+        "epoch": epoch,
+        "overall_percent": overall_percent(status, last),
         "metrics": {"last": last or None, "trend": metric_trend(metrics), "count": len(metrics)},
         "tail": tail.splitlines()[-tail_lines:] if tail else [],
         "diagnosis": diagnosis,

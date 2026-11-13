@@ -514,6 +514,13 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                 identifier,
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
+            s.activity = {
+                "file": file or "stdin",
+                "cell": i + 1,
+                "total": total,
+                "label": block["label"],
+                "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            }
             state.store.add(s)
 
             source = Block(
@@ -593,6 +600,7 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                     break
     finally:
         s.running = None
+        s.activity = None
         state.store.update_if_present(s)
         runtime.stop()
         if is_nb:

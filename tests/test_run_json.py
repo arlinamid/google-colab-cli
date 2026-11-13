@@ -248,3 +248,44 @@ def test_detach_json(runtime, job_kernel, tmp_path):
 
     rec = json.loads(result.stdout)
     assert rec["type"] == "job" and rec["session"] == "bg" and rec["state"] == "starting"
+
+
+def _notebook(tmp_path, name="nb.ipynb"):
+    import nbformat
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell("print(1)")]
+    path = tmp_path / name
+    nbformat.write(nb, str(path))
+    return path
+
+
+def test_detach_runs_a_notebook_as_a_job(runtime, job_kernel, tmp_path, mock_common_state):
+    path = _notebook(tmp_path)
+
+    result = runner.invoke(app, ["run", "--detach", "-s", "bg", str(path)])
+
+    assert result.exit_code == 0, result.output
+    code = job_kernel.execute_code.call_args.args[0]
+    assert "'{dir}/notebook.py', '{dir}/cells.json'" in code
+
+
+def test_a_notebook_without_detach_fails_before_a_vm(runtime, tmp_path, mock_common_state):
+    path = _notebook(tmp_path)
+
+    result = runner.invoke(app, ["run", "-s", "bg", str(path)])
+
+    assert result.exit_code == 2
+    assert "--detach" in result.output
+    mock_common_state.client.assign.assert_not_called()
+
+
+def test_a_broken_notebook_fails_before_a_vm(runtime, tmp_path, mock_common_state):
+    path = tmp_path / "bad.ipynb"
+    path.write_text("not json", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "--detach", "-s", "bg", str(path)])
+
+    assert result.exit_code == 2
+    assert "Cannot read the notebook" in result.output
+    mock_common_state.client.assign.assert_not_called()
