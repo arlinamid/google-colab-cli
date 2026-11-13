@@ -239,3 +239,25 @@ def test_status_shows_the_running_cell(mock_common_state):
     result = runner.invoke(app, ["status"])
 
     assert "Running: nb.ipynb, cell 3/12 (cell 3 (Setup)) since 2026-11-13T10:00:00" in result.output
+
+
+def test_var_sets_python_globals_before_the_first_cell_only(tmp_path, mock_runtime_class, session):
+    ran = _runtime_running(mock_runtime_class)
+    path = _write_nb(tmp_path, "x = 1", "print(x)")
+
+    result = runner.invoke(app, [
+        "exec", "-s", "s1", "-f", path,
+        "--var", 'CONFIG={"access": "forward", "n": 2}', "--var", "NAME=plain text",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert ran[0].startswith("CONFIG = {'access': 'forward', 'n': 2}\nNAME = 'plain text'\n")
+    assert ran[0].endswith("x = 1")
+    assert "CONFIG" not in ran[1]
+
+
+def test_var_needs_a_python_name(tmp_path, mock_runtime_class, session):
+    path = _write_nb(tmp_path, "x = 1")
+    result = runner.invoke(app, ["exec", "-s", "s1", "-f", path, "--var", "1x=2"])
+    assert result.exit_code == 2
+    assert "--var" in result.output

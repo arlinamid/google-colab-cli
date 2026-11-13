@@ -261,3 +261,30 @@ def setup_logging(log_to_stderr: bool):
         stream_handler = logging.StreamHandler(sys.stderr)
         stream_handler.setFormatter(_RedactingFormatter(log_format))
         logger.addHandler(stream_handler)
+
+
+DEFAULT_CLIENT_OAUTH_CONFIG = os.path.expanduser("~/.colab-cli-oauth-config.json")
+
+
+def colab_argv(st=None) -> list:
+    """The command that runs this same CLI, with the global options in use.
+
+    For commands that drive the CLI's own subcommands as child processes
+    (`colab profile run`, the tray): the standalone binary runs itself, a
+    Python install runs ``python -m colab_cli``; --auth, --config, -c and
+    --logtostderr carry over.
+    """
+    st = st or state
+    if getattr(sys, "frozen", False):
+        argv = [sys.executable]
+    else:
+        argv = [sys.executable, "-m", "colab_cli"]
+    argv.append(f"--auth={AuthProvider(st.auth_provider).value}")
+    if st.config_path:
+        argv += ["--config", st.config_path]
+    oauth = getattr(st, "client_oauth_config", None)
+    if oauth and os.path.abspath(oauth) != os.path.abspath(DEFAULT_CLIENT_OAUTH_CONFIG):
+        argv += ["-c", oauth]
+    if getattr(st, "logtostderr", False):
+        argv.append("--logtostderr")
+    return argv
