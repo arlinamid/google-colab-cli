@@ -512,7 +512,7 @@ def run_command(
     meter = None
     run_limit = None
     if json_output or budget is not None:
-        meter = CostMeter(state.client, accelerator=accelerator.value)
+        meter = CostMeter(state.client, accelerator=accelerator.value, settings_store=state.settings_store)
     if budget is not None:
         run_limit = meter.seconds_for(budget)
         if run_limit is None:

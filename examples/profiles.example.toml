@@ -1,0 +1,26 @@
+# Example run profiles (docs/09_tray_and_profiles.md).
+# Copy the ones you want into your own profiles.toml (`colab profile path`
+# prints where it is; `colab profile edit` or the tray's profile editor opens
+# it). Relative script paths are relative to that profiles.toml.
+
+# A small CPU "training" to watch progress in the tray: a tqdm bar per epoch,
+# epochs and a falling loss reported with colab_feedback.report().
+[demo-train]
+description = "Demo: small CPU training with progress (about 5 minutes)"
+script = "C:/path/to/google-colab-cli/examples/tray_demo_train.py"
+args = ["--epochs", "5", "--steps", "60", "--delay", "1"]
+budget = 0.05            # compute units: stops the job if it runs much longer
+stop_when_done = true    # the tray stops the runtime once the job has ended
+
+# A web server started in the kernel and forwarded to this computer.
+# [web-ui]
+# description = "Gradio app on a T4"
+# script = "C:/work/app_server.py"     # starts the server in the background and returns
+# mode = "kernel"
+# session = "web-ui"                   # reused while it is alive
+# gpu = "T4"
+# secrets = ["HF_TOKEN=hf-cli"]        # names of `colab secret` entries, never values
+# vars = { CONFIG = { port = 7860 } }  # Python globals set before the script
+# forward = [7860]
+# open = "http://127.0.0.1:7860"
+# stop_when_done = false

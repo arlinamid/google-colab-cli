@@ -54,11 +54,82 @@ def test_meter_estimates_from_the_hourly_rate():
     assert meter.block(900) == {
         "accelerator": "T4",
         "rate_cu_per_hour": 2.0,
+        "account_rate_cu_per_hour": 2.0,
+        "rate_basis": "account",
         "balance_cu": 100.0,
         "used_cu_estimate": 0.5,
         "hours_left_at_rate": 50.0,
         "assignments": 1,
     }
+
+
+def _assignments(*accelerators):
+    from types import SimpleNamespace
+
+    return [SimpleNamespace(accelerator=SimpleNamespace(value=a)) for a in accelerators]
+
+
+class _Store:
+    def __init__(self, rates=None):
+        from colab_cli.state import Settings
+
+        self.settings = Settings(cost_rates=rates or {})
+        self.saved = 0
+
+    def load(self):
+        return self.settings
+
+    def save(self, settings):
+        self.settings = settings
+        self.saved += 1
+
+
+def test_alone_the_account_rate_is_this_runtime_and_is_learned():
+    client = _client(_info(rate=0.08, count=1))
+    client.list_assignments.return_value = _assignments("NONE")
+    store = _Store()
+
+    meter = CostMeter(client, accelerator="NONE", settings_store=store)
+
+    assert meter.rate == 0.08 and meter.basis == "only_runtime"
+    assert store.settings.cost_rates == {"NONE": 0.08}
+
+
+def test_next_to_a_gpu_a_cpu_budget_uses_the_cpu_rate():
+    """The demo bug: 0.05 CU on a CPU next to a T4 stopped after 2.4 minutes."""
+    client = _client(_info(rate=1.23, count=2))
+    client.list_assignments.return_value = _assignments("T4", "NONE")
+
+    learned = CostMeter(client, accelerator="NONE", settings_store=_Store({"NONE": 0.075}))
+    assert learned.rate == 0.075 and learned.basis == "learned"
+    assert round(learned.seconds_for(0.05)) == 2400
+
+    default = CostMeter(client, accelerator="NONE", settings_store=_Store())
+    assert default.basis == "default" and default.rate == 0.08
+    block = default.block(3600)
+    assert block["rate_cu_per_hour"] == 0.08 and block["account_rate_cu_per_hour"] == 1.23
+
+
+def test_an_unknown_rate_is_the_account_rate_minus_the_others():
+    client = _client(_info(rate=7.0, count=2))
+    client.list_assignments.return_value = _assignments("T4", "A100")
+    meter = CostMeter(client, accelerator="A100", settings_store=_Store({"T4": 1.2}))
+    assert meter.rate == pytest.approx(5.8) and meter.basis == "account_minus_others"
+
+    client.list_assignments.return_value = _assignments("L4", "A100")  # L4 unknown too
+    meter = CostMeter(client, accelerator="A100", settings_store=_Store({"T4": 1.2}))
+    assert meter.rate == 7.0 and meter.basis == "account"
+
+
+def test_learn_rates_only_from_a_single_runtime():
+    from colab_cli.cost import learn_rates
+
+    store = _Store()
+    learn_rates(store, ["T4"], 1.12)
+    learn_rates(store, ["T4", "NONE"], 1.2)
+    assert store.settings.cost_rates == {"T4": 1.12} and store.saved == 1
+    learn_rates(store, ["T4"], 1.12)
+    assert store.saved == 1  # unchanged: not written again
 
 
 def test_meter_without_consumption_info():

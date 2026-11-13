@@ -267,7 +267,8 @@ def launch_job(state, session_name, s, *, file, files, argv, env_vars, name, bud
     job_id = new_job_id(label)
     max_seconds = None
     if budget is not None:
-        max_seconds = CostMeter(state.client).seconds_for(budget)
+        max_seconds = CostMeter(state.client, accelerator=getattr(s, "accelerator", None),
+                                settings_store=state.settings_store).seconds_for(budget)
         if max_seconds is None:
             typer.echo("[colab] --budget not enforced: no compute-unit rate is available.", err=True)
 
@@ -324,7 +325,8 @@ def status(
     state, session_name, s = _session(session)
     files = ContentsClient(s)
     job_id = _resolve_job(files, job_id, session_name)
-    meter = CostMeter(state.client) if json_output else None
+    meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None),
+                      settings_store=state.settings_store) if json_output else None
     rec = _record(files, job_id, session_name, stall_after, tail_lines=lines, meter=meter)
     if json_output:
         JsonEmitter(sys.stdout).emit(rec)
@@ -383,7 +385,8 @@ def wait(
     files = ContentsClient(s)
     job_id = _resolve_job(files, job_id, session_name)
     pinger = _Pinger(state.client, s.endpoint)
-    meter = CostMeter(state.client) if json_output else None
+    meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None),
+                      settings_store=state.settings_store) if json_output else None
     started = time.monotonic()
     while True:
         rec = _record(files, job_id, session_name, stall_after, meter=meter)

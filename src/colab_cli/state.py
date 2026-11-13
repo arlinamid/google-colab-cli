@@ -64,6 +64,9 @@ class Settings(BaseModel):
     tray_notifications: bool = True
     tray_language: str = "auto"
     tray_last_profile: Optional[str] = None
+    # Hourly compute-unit rate per accelerator ("NONE", "T4", ...), learned
+    # whenever a runtime was the only one (cost.py), for per-runtime budgets.
+    cost_rates: Dict[str, float] = {}
 
 
 _OWNER_ONLY_MODE = 0o600

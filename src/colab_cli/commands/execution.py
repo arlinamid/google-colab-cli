@@ -508,7 +508,8 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
     meter = None
     run_end = None
     if emitter or budget is not None:
-        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None))
+        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None),
+                          settings_store=state.settings_store)
     if budget is not None:
         seconds = meter.seconds_for(budget)
         if seconds is None:

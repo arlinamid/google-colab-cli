@@ -136,3 +136,30 @@ def test_redact_secrets_masks_query_tokens_and_bearer():
     assert "eyJabc.def" not in out
     assert "abcdefghijkl" not in out
     assert "authuser=0" in out
+
+
+def test_colab_log_rotates_and_survives_a_locked_file(tmp_path, mocker):
+    import logging
+
+    from colab_cli import common
+
+    path = tmp_path / "colab.log"
+    handler = common._RotatingFileHandler(str(path), maxBytes=200, backupCount=2, encoding="utf-8", delay=True)
+    logger = logging.getLogger("colab-rotate-test")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        for i in range(30):
+            logger.info("line %d %s", i, "x" * 40)
+        assert (tmp_path / "colab.log.1").exists() and not (tmp_path / "colab.log.3").exists()
+        assert path.stat().st_size <= 400
+
+        # Another process has the file open (Windows): the rollover is skipped.
+        mocker.patch.object(common.RotatingFileHandler, "doRollover", side_effect=PermissionError("in use"))
+        logger.info("still logged %s", "y" * 300)
+        handler.flush()
+        assert "still logged" in path.read_text(encoding="utf-8")
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+    assert common.LOG_MAX_BYTES == 10 * 1024 * 1024

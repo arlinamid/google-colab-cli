@@ -177,6 +177,10 @@ def collect_snapshot(state, prev: Optional[Dict[str, Any]] = None, now: Optional
         account = snap["account"]
         if account is None or now - account.get("fetched_at", 0) >= ACCOUNT_EVERY_SEC:
             info = state.client.get_consumption_user_info()
+            from colab_cli.cost import learn_rates
+
+            learn_rates(getattr(state, "settings_store", None),
+                        [a.accelerator.value for a in assignments], info.consumption_rate_hourly)
             account = {
                 "balance_cu": info.paid_compute_units_balance,
                 "rate_cu_per_hour": info.consumption_rate_hourly,

@@ -14,6 +14,7 @@
 
 import contextlib
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
@@ -32,6 +33,8 @@ from colab_cli.state import (
     make_private,
     private_opener,
 )
+
+LOG_MAX_BYTES = 10 * 1024 * 1024
 
 # Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
@@ -233,6 +236,22 @@ class _RedactingFormatter(logging.Formatter):
         return redact_secrets(super().format(record))
 
 
+class _RotatingFileHandler(RotatingFileHandler):
+    """Rotates colab.log, and keeps logging when it cannot.
+
+    On Windows a file another colab process has open (the tray, a running
+    exec) cannot be renamed; the rollover is then skipped instead of printing
+    a logging error into the command's output.
+    """
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except OSError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
 def setup_logging(log_to_stderr: bool):
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logger = logging.getLogger()
@@ -253,7 +272,10 @@ def setup_logging(log_to_stderr: bool):
     make_private(log_path)
     # DEBUG logs carry kernel code and output verbatim; the default encoding
     # is the Windows code page, which fails on most non-ASCII text.
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    # Rotated: long-running callers (`colab tray`) would otherwise grow it
+    # without end. 10 MB, plus colab.log.1 and .2.
+    file_handler = _RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=2,
+                                        encoding="utf-8", delay=True)
     file_handler.setFormatter(_RedactingFormatter(log_format))
     logger.addHandler(file_handler)
 
