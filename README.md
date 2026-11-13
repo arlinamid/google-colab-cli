@@ -68,7 +68,7 @@ For the tray panel add the `[tray]` extra (it installs Qt, PySide6, about 80 MB)
 uv tool install "google-colab-cli[tray] @ git+https://github.com/arlinamid/google-colab-cli"
 ```
 
-This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.3.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.2`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
+This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.4.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.3`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
 
 `uv tool install google-colab-cli` / `pip install google-colab-cli` install Google's official release from PyPI instead, without this fork's changes.
 

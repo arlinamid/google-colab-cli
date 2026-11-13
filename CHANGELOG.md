@@ -10,12 +10,32 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0.3] - 2026-11-13
+
+The desktop release: a tray panel for the runtimes, saved run profiles, progress over the whole run and notebooks as background jobs (docs/09_tray_and_profiles.md). Still based on Google's Colab CLI 0.8.0.
+
 ### Added
 
 - **tray:** `colab tray` shows the active runtimes in the system tray (Windows, macOS, Linux; optional `[tray]` extra with Qt). Its panel has a card per runtime with progress, ETA, the main metric and Log/SSH/Stop buttons, the compute units left (estimated) and a button to start profiles; the icon's colour and tooltip say the state, errors and stale data. Stopping asks whether only the job or the whole runtime stops. Notifications for finished or failed jobs, lost runtimes and a low balance. A runtime behind a `colab forward` (from any tool) shows as a service with an Open button. The tray never keeps a runtime alive. `colab tray --snapshot [--json]` prints the same without a GUI.
-- **profile:** `colab profile` saves run setups in `profiles.toml`. `colab profile run NAME` starts a script or notebook as a background job on a new runtime (or its fixed session), or runs a server in the kernel, forwards its ports and opens its URL once it answers. With `stop_when_done` (the default) the tray stops the runtime after the job.
+- **tray:** the panel answers a profile start at once: a "Starting" card with a moving bar, the phase (getting a runtime, running the script, waiting for the service) and the time so far; a kernel profile's card shows its script's newest line while it sets up. A profile cannot be started a second time while its run is alive.
+- **tray:** its own windows: a profile editor (a form whose fields follow the mode, file pickers, help for each field, validation, "Save and start") and a log window that follows a job's output (Follow, Refresh, Copy).
+- **tray:** start with the computer, per user and without administrator rights (Windows Run key with `pythonw.exe`, macOS LaunchAgent, Linux XDG autostart): a checkbox in the settings and `colab tray --autostart on|off|status`.
+- **tray:** more settings: the low-balance warning limit (hours at the current rate), the idle-runtime warning (minutes), asking before a profile starts, and the terminal for Log and SSH (automatic, a preset per platform, or a command with `{cmd}`). `colab tray --snapshot` uses the same warning limits.
+- **profile:** `colab profile` saves run setups in `profiles.toml`. `colab profile run NAME` starts a script or notebook as a background job on a new runtime (or its fixed session), or runs a server in the kernel, forwards its ports and opens its URL once it answers. With `stop_when_done` (the default) the tray stops the runtime after the job. `colab profile edit` opens the file in your editor (with commented examples when it is new) and checks it.
 - **job:** `colab job start -f notebook.ipynb` (and `colab run --detach notebook.ipynb`) runs a notebook's code cells in order in IPython on the runtime; `colab job status` names the running cell. `report(epoch=, epochs=)` or `report(step=, total=)` gives the progress of the whole run (`overall_percent`); the status also shows the epoch and how long ago the last output came.
 - **exec:** `--var NAME=JSON` sets a Python global before the code runs. A running `colab exec` records its cell, which `colab status` shows.
+- **examples:** `examples/tray_demo_train.py` (a small CPU training to watch in the tray) and `examples/profiles.example.toml`.
+
+### Changed
+
+- **cost:** estimates and `--budget` use the runtime's own hourly rate instead of the account's, which counts every runtime: a 0.05 CU budget on a CPU next to a T4 stopped after 2.4 minutes instead of about 37. The rate is learned per accelerator while a runtime runs alone; the `cost` block says how it was found (`rate_basis`) and keeps the account rate.
+- **logging:** `colab.log` rotates at 10 MB (two old files kept); a long-running tray had grown it to 200 MB.
+
+### Fixed
+
+- **tray:** a job started on a new runtime showed after up to 5 minutes (the runtime was seen before its job started); new runtimes are now watched for their first 3 minutes.
+- **tray:** a runtime created after the tray started showed as an orphan; dialogs opened behind the panel; terminal windows (Log, SSH) closed when their command ended.
+- **logging:** the same line was written several times when the CLI ran more than one command in one process.
 
 ## [0.8.0.2] - 2026-11-12
 
@@ -189,6 +209,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.3]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.3
 [0.8.0.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.2
 [0.8.0.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.1
 [0.7.5.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.7.5.2
