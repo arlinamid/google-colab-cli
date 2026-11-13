@@ -11,6 +11,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 > * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
 > * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit, and when set it interrupts the kernel after that many seconds without output.
 > * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
+> * **Tray panel and profiles:** `colab tray` (optional `[tray]` extra) shows the runtimes, their progress and the compute units left in the system tray, and starts saved run profiles (`colab profile`): a script or notebook as a background job, or a server in the kernel with a port forward. See [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md).
 > * **Feedback for AI agents:** `--json` results for `exec`, `run`, `usage` and `job` (failing line in your file, a diagnosis code and the commands to try next), background jobs with `colab job` and `colab run --detach`, `colab inspect` (variables, GPU, disk, packages), a compute-unit `--budget`, and `colab history` (recurring failures and what fixed them). See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
 > * **Updates:** `colab update` offers and installs this fork's releases; a newer Google release is only announced, so an update never replaces the fork with Google's package.
 >
@@ -47,6 +48,12 @@ uv tool install git+https://github.com/arlinamid/google-colab-cli
 
 # Using pip
 pip install git+https://github.com/arlinamid/google-colab-cli
+```
+
+For the tray panel add the `[tray]` extra (it installs Qt, PySide6, about 80 MB):
+
+```bash
+uv tool install "google-colab-cli[tray] @ git+https://github.com/arlinamid/google-colab-cli"
 ```
 
 This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.3.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.2`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
@@ -98,11 +105,13 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | Command | Description |
 | --- | --- |
 | `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep \| --detach] [--secret SPEC] [--json] [--budget CU] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it; `--detach` starts it as a background `colab job` and keeps the VM |
-| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--cells SPEC] [--stop-on-error] [--check \| --check-only] [--json \| --json-stream]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
+| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--secret SPEC] [--var NAME=JSON] [--cells SPEC] [--stop-on-error] [--check \| --check-only] [--json \| --json-stream]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook (exits 1 if the code or any cell raised an error) |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-L PORT [-N]] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
-| `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] [--budget CU] [--json] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; Python jobs can report metrics with `colab_feedback.report()`; `--budget` stops the job once it has used about that many compute units |
-| `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
+| `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] [--budget CU] [--json] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; `-f` also takes a notebook (`.ipynb`, its cells run in order in IPython); Python jobs report metrics, and `report(epoch=, epochs=)` the overall progress, with `colab_feedback.report()`; `--budget` stops the job once it has used about that many compute units |
+| `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, overall progress, epoch or notebook cell, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
+| `colab profile list\|show\|add\|rm\|path\|run` | Saved run setups in `profiles.toml`: `run NAME` starts a script or notebook as a background job (new runtime, or its fixed session), or runs a server in the kernel (`vars`), forwards its ports and opens its URL when ready |
+| `colab tray [--interval S] [--detach] [--snapshot [--json]]` | Tray icon and panel (needs the `[tray]` extra): runtimes with progress, ETA and main metric, Log/SSH/Stop, compute units left (estimated), start profiles, notifications; it never keeps a runtime alive. `--snapshot` prints the same without a GUI |
 | `colab inspect [-s NAME] [--vars] [--gpu] [--disk] [--packages] [--files PATH] [--json]` | Show the kernel's variables (types and shapes, never values), GPU, disk, memory and packages installed since the first inspect; a busy kernel is not queued behind |
 | `colab history errors\|stats [-s NAME] [--since 7d] [--json]` | Learn from earlier runs: recurring failures and what fixed them last time; runs, success rate, usual duration and cost per file (local history only) |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
@@ -252,6 +261,8 @@ For comprehensive architectural overviews and deep-dives into specific CLI sub-s
 * [File Management & Jupyter Contents API](docs/03_file_management.md)
 * [Authentication Providers & VM Automation](docs/04_automation_and_utility.md)
 * [Ephemeral Job Runner Design](docs/05_run_command.md)
+* [Agent Feedback Loop](docs/08_agent_feedback.md)
+* [Tray Panel, Progress and Run Profiles](docs/09_tray_and_profiles.md)
 
 To view interactive walkthroughs of eleven real-world automated scenarios, check out the [Demo Walkthroughs](docs/demos.md).
 

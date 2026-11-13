@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: `colab run --detach` also takes a notebook (`.ipynb`), run as a background job cell by cell (docs/09); without `--detach` a notebook is refused (exit 2) before a runtime is created. The script or notebook is read before the VM is allocated in both cases.
 2026-11-12: `colab run --detach`: after creating the runtime, the script starts as a background job (`commands/job.py:launch_job`, phase B) and the command returns; the runtime is kept, and `--budget` becomes the job's `max_seconds`. Script arguments are remote, so Git Bash path rewrites are undone (`utils.undo_msys_args`). Live: a detached 3 s job finished with all its output.
 2026-11-12: `colab run --json` (before the script path; also `COLAB_CLI_JSON=1`): the script's output goes into one JSON record (with `error.location` mapped to the script line, past the payload prelude and a stripped shebang, `diagnosis` and `exit_code`) followed by a summary. The process exit code stays the script's; a lost session exits 3 and a timeout 4. See docs/08_agent_feedback.md.
 2026-11-11: Merged upstream v0.8.0: `--timeout` is now an idle limit (seconds without output, upstream #185); the hybrid keeps no limit as the default and interrupts the kernel on a timeout. Unknown `--gpu`/`--tpu` values are rejected (upstream #211).

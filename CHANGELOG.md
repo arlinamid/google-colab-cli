@@ -10,6 +10,13 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Added
+
+- **tray:** `colab tray` shows the active runtimes in the system tray (Windows, macOS, Linux; optional `[tray]` extra with Qt). Its panel has a card per runtime with progress, ETA, the main metric and Log/SSH/Stop buttons, the compute units left (estimated) and a button to start profiles; the icon's colour and tooltip say the state, errors and stale data. Stopping asks whether only the job or the whole runtime stops. Notifications for finished or failed jobs, lost runtimes and a low balance. The tray never keeps a runtime alive. `colab tray --snapshot [--json]` prints the same without a GUI.
+- **profile:** `colab profile` saves run setups in `profiles.toml`. `colab profile run NAME` starts a script or notebook as a background job on a new runtime (or its fixed session), or runs a server in the kernel, forwards its ports and opens its URL once it answers. With `stop_when_done` (the default) the tray stops the runtime after the job.
+- **job:** `colab job start -f notebook.ipynb` (and `colab run --detach notebook.ipynb`) runs a notebook's code cells in order in IPython on the runtime; `colab job status` names the running cell. `report(epoch=, epochs=)` or `report(step=, total=)` gives the progress of the whole run (`overall_percent`); the status also shows the epoch and how long ago the last output came.
+- **exec:** `--var NAME=JSON` sets a Python global before the code runs. A running `colab exec` records its cell, which `colab status` shows.
+
 ## [0.8.0.2] - 2026-11-12
 
 The agent feedback loop: results, background jobs, inspection, cost and history for scripts and AI agents (docs/08_agent_feedback.md). Still based on Google's Colab CLI 0.8.0, and includes everything from 0.8.0.1, whose release had no binaries attached.
