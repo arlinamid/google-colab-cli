@@ -328,6 +328,10 @@ def _run_job(name: str, p: Profile, script: str, session: str, reuse: bool, fore
 
 
 def _run_kernel(name: str, p: Profile, script: str, session: str, reuse: bool, no_open: bool) -> int:
+    if p.forward:  # no key: fail before a runtime is created, as `colab ssh` does
+        from colab_cli.commands.ssh import _require_ssh_key
+
+        _require_ssh_key(p.ssh_key)
     if reuse:
         typer.echo(f"[colab] Reusing runtime '{session}'.", err=True)
     else:

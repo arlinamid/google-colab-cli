@@ -159,6 +159,9 @@ def test_run_kernel_profile_with_forward(profiles_file, calls, mock_common_state
     forward.poll.return_value = None
     forward.wait.return_value = 0
     popen = mocker.patch.object(profile_cmd.subprocess, "Popen", return_value=forward)
+    from colab_cli.commands import ssh as ssh_cmd
+
+    mocker.patch.object(ssh_cmd, "_require_ssh_key")
     answers = iter([OSError("refused"), MagicMock(status=200)])
 
     def urlopen(url, timeout):
@@ -213,5 +216,22 @@ def test_run_unknown_profile(profiles_file):
 def test_run_missing_script_fails_before_a_runtime(profiles_file, calls):
     (profiles_file.parent / "train.py").unlink()
     result = runner.invoke(app, ["profile", "run", "train"])
+    assert result.exit_code == 2
+    assert calls == []
+
+
+def test_forward_profile_without_a_key_fails_before_a_runtime(profiles_file, calls, mocker):
+    import typer
+
+    from colab_cli.commands import ssh as ssh_cmd
+
+    def no_key(identity):
+        assert identity == "~/k"
+        raise typer.Exit(2)
+
+    mocker.patch.object(ssh_cmd, "_require_ssh_key", side_effect=no_key)
+
+    result = runner.invoke(app, ["profile", "run", "ui"])
+
     assert result.exit_code == 2
     assert calls == []
