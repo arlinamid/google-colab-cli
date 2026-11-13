@@ -202,8 +202,10 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
 - `colab tray --autostart on|off|status`: start the tray when the user signs
   in, stop doing so, or show the command that runs then; exits without the
   GUI. `tray/autostart.py` keeps it where the operating system looks, per
-  user, no administrator rights: Windows `HKCU\Software\Microsoft\Windows  CurrentVersion\Run\Colab CLI tray` (python.exe becomes pythonw.exe so no
-  console window stays open; the standalone binary is used as it is),
+  user, no administrator rights: Windows
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Colab CLI tray`
+  (python.exe becomes pythonw.exe so no console window stays open; the
+  standalone binary is used as it is),
   macOS `~/Library/LaunchAgents/com.github.arlinamid.colab-cli.tray.plist`
   (`RunAtLoad`), Linux `$XDG_CONFIG_HOME/autostart/colab-cli-tray.desktop`
   (default `~/.config`). The command is `colab_argv()` plus `tray`, so the
