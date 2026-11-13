@@ -27,7 +27,7 @@ import time
 import webbrowser
 from typing import Any, Dict, Optional, Set
 
-from PySide6.QtCore import QLocale, QObject, QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QLocale, QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
@@ -266,7 +266,7 @@ class TrayApp(QObject):
 
     def choose_stop(self, card, options) -> Optional[str]:
         """The stop dialog; returns "job", "runtime" or None (cancel)."""
-        dialog = QDialog(self.panel)
+        dialog = QDialog()
         dialog.setWindowTitle(t(self.lang, "stop.title", name=card["name"]))
         box = QVBoxLayout(dialog)
         box.addWidget(QLabel(t(self.lang, "stop.title", name=card["name"])))
@@ -283,13 +283,34 @@ class TrayApp(QObject):
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         box.addWidget(buttons)
+        if self.run_dialog(dialog) != QDialog.Accepted:
+            return None
+        return next(r.property("choice") for r in radios if r.isChecked())
+
+    def run_dialog(self, dialog) -> int:
+        """Show a dialog above the panel and wait for it.
+
+        The panel is a frameless, always-on-top tool window: a dialog owned by
+        it could open behind it and inherited its dark style sheet. Dialogs
+        are top-level and always on top instead, centred on the panel (or the
+        screen), and the panel stays open meanwhile.
+        """
+        dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dialog.adjustSize()
+        anchor = self.panel.frameGeometry() if self.panel.isVisible() else (
+            QGuiApplication.primaryScreen().availableGeometry())
+        dialog.move(anchor.center() - dialog.rect().center())
+
+        def bring_up():
+            dialog.raise_()
+            dialog.activateWindow()
+
         self.panel.keep_open = True
         try:
-            if dialog.exec() != QDialog.Accepted:
-                return None
+            QTimer.singleShot(0, bring_up)
+            return dialog.exec()
         finally:
             self.panel.keep_open = False
-        return next(r.property("choice") for r in radios if r.isChecked())
 
     def ask_stop(self, card):
         has_service = card["name"] in self.services()
@@ -305,15 +326,11 @@ class TrayApp(QObject):
         QTimer.singleShot(3000, self.refresh)
 
     def confirm(self, title: str, body: str) -> bool:
-        self.panel.keep_open = True
-        try:
-            box = QMessageBox(QMessageBox.Question, title, body, parent=self.panel)
-            start = box.addButton(t(self.lang, "start"), QMessageBox.AcceptRole)
-            box.addButton(t(self.lang, "cancel"), QMessageBox.RejectRole)
-            box.exec()
-            return box.clickedButton() is start
-        finally:
-            self.panel.keep_open = False
+        box = QMessageBox(QMessageBox.Question, title, body)
+        start = box.addButton(t(self.lang, "start"), QMessageBox.AcceptRole)
+        box.addButton(t(self.lang, "cancel"), QMessageBox.RejectRole)
+        self.run_dialog(box)
+        return box.clickedButton() is start
 
     def start_profile(self, name: str):
         self._load_profiles()
@@ -334,7 +351,7 @@ class TrayApp(QObject):
         self.tray.showMessage("Colab CLI", text, icon, 8000)
 
     def open_settings(self):
-        dialog = QDialog(self.panel)
+        dialog = QDialog()
         dialog.setWindowTitle(t(self.lang, "settings.title"))
         form = QFormLayout(dialog)
         interval = QDoubleSpinBox(minimum=10, maximum=3600, decimals=0, value=self.interval)
@@ -352,12 +369,8 @@ class TrayApp(QObject):
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
-        self.panel.keep_open = True
-        try:
-            if dialog.exec() != QDialog.Accepted:
-                return
-        finally:
-            self.panel.keep_open = False
+        if self.run_dialog(dialog) != QDialog.Accepted:
+            return
         self.settings.tray_interval = interval.value()
         self.settings.tray_notifications = notifications.isChecked()
         self.settings.tray_language = language.currentData()

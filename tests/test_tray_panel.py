@@ -232,3 +232,26 @@ def test_status_icon_draws(qapp):
     assert not status_icon("#34a853").isNull()
     pix = logo_pixmap(30)
     assert pix.height() == 30 and pix.width() > 40
+
+
+def test_dialogs_open_on_top_of_the_panel_without_its_style(tray, mocker):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog
+
+    seen = {}
+
+    def fake_exec(dialog):
+        seen["flags"] = dialog.windowFlags()
+        seen["parent"] = dialog.parent()
+        seen["keep_open"] = tray.panel.keep_open
+        return QDialog.Rejected
+
+    mocker.patch.object(QDialog, "exec", fake_exec)
+    _render(tray, [_entry("train-t4", _job())])
+    tray.panel.show()
+
+    tray.open_settings()
+
+    assert seen["flags"] & Qt.WindowStaysOnTopHint
+    assert seen["parent"] is None
+    assert seen["keep_open"] is True and tray.panel.keep_open is False
