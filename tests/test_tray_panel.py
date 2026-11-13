@@ -37,7 +37,19 @@ NOW = 1_000_000.0
 
 @pytest.fixture(scope="module")
 def qapp():
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    yield app
+    # Delete what the tests made while Qt is still up: widgets and QObjects left
+    # for interpreter shutdown were destroyed after Qt and crashed the process
+    # on Windows (access violation after "N passed", exit code != 0).
+    from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
+
+    QThreadPool.globalInstance().waitForDone(5000)
+    for w in QApplication.topLevelWidgets():
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
 
 
 def _entry(name, job=None, **kw):
@@ -76,6 +88,14 @@ def tray(qapp, tmp_path, mocker):
     t.notify = MagicMock()
     yield t
     t.panel.hide()
+    t.timer.stop()
+    t.ticker.stop()
+    t.tray.hide()
+    for w in t.windows:
+        w.close()
+        w.deleteLater()
+    t.panel.deleteLater()
+    t.deleteLater()
 
 
 def _render(tray, sessions):

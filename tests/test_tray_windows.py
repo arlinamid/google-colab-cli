@@ -33,7 +33,19 @@ from colab_cli.profiles import load_profiles  # noqa: E402
 
 @pytest.fixture(scope="module")
 def qapp():
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    yield app
+    # Delete what the tests made while Qt is still up: widgets and QObjects left
+    # for interpreter shutdown were destroyed after Qt and crashed the process
+    # on Windows (access violation after "N passed", exit code != 0).
+    from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
+
+    QThreadPool.globalInstance().waitForDone(5000)
+    for w in QApplication.topLevelWidgets():
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
 
 
 @pytest.fixture
