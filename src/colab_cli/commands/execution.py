@@ -14,6 +14,7 @@
 
 import contextlib
 import datetime
+import json
 import nbformat
 import os
 import re
@@ -376,6 +377,17 @@ def exec_command(
             ),
         ),
     ] = None,
+    var: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--var",
+            help=(
+                "Set a Python global before the code runs, as NAME=VALUE; VALUE "
+                "is JSON (a number, list, object...) or else a string. "
+                "Repeatable. Set once, before the first cell."
+            ),
+        ),
+    ] = None,
 ):
     """Execute code in a session.
 
@@ -384,21 +396,42 @@ def exec_command(
     """
     from colab_cli.common import state
 
+    variables = parse_vars(var)
     args = (state, session, file, output_image, timeout, env, secret, cells,
             stop_on_error, check, check_only)
     if not (json_output or json_stream):
-        _exec(*args, budget=budget)
+        _exec(*args, budget=budget, variables=variables)
         return
     emitter = JsonEmitter(sys.stdout)
     # Human output ([colab] lines, notebook progress) must not mix with JSON.
     with contextlib.redirect_stdout(sys.stderr):
         _exec(*args, emitter=emitter, stream_events=json_stream,
-              output_dir=output_dir, budget=budget)
+              output_dir=output_dir, budget=budget, variables=variables)
+
+
+def parse_vars(items: Optional[List[str]]) -> dict:
+    """``NAME=VALUE`` pairs of --var; VALUE is JSON, else kept as a string."""
+    out = {}
+    for item in items or []:
+        name, sep, value = item.partition("=")
+        if not sep or not name.isidentifier():
+            typer.echo(f"[colab] --var wants NAME=VALUE with a Python name, got {item!r}.", err=True)
+            raise typer.Exit(2)
+        try:
+            out[name] = json.loads(value)
+        except ValueError:
+            out[name] = value
+    return out
+
+
+def build_var_prelude(variables: Optional[dict]) -> str:
+    """Python source that assigns ``variables`` as globals (repr round-trips)."""
+    return "".join(f"{name} = {value!r}\n" for name, value in (variables or {}).items())
 
 
 def _exec(state, session, file, output_image, timeout, env, secret, cells,
           stop_on_error, check, check_only, *, emitter=None,
-          stream_events=False, output_dir=None, budget=None):
+          stream_events=False, output_dir=None, budget=None, variables=None):
     env_vars = _parse_env_vars(env)
     is_nb = bool(file and file.endswith(".ipynb"))
     if (cells is not None or stop_on_error) and not is_nb:
@@ -475,7 +508,8 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
     meter = None
     run_end = None
     if emitter or budget is not None:
-        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None))
+        meter = CostMeter(state.client, accelerator=getattr(s, "accelerator", None),
+                          settings_store=state.settings_store)
     if budget is not None:
         seconds = meter.seconds_for(budget)
         if seconds is None:
@@ -498,7 +532,7 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
 
         total = len(code_blocks)
         for i, block in enumerate(code_blocks):
-            prelude = _build_env_prelude(env_vars)
+            prelude = (build_var_prelude(variables) if i == 0 else "") + _build_env_prelude(env_vars)
             code = prelude + block["code"]
             identifier = None
             if is_nb:
@@ -514,6 +548,13 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                 identifier,
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
+            s.activity = {
+                "file": file or "stdin",
+                "cell": i + 1,
+                "total": total,
+                "label": block["label"],
+                "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            }
             state.store.add(s)
 
             source = Block(
@@ -593,6 +634,7 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
                     break
     finally:
         s.running = None
+        s.activity = None
         state.store.update_if_present(s)
         runtime.stop()
         if is_nb:

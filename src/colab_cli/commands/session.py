@@ -318,6 +318,12 @@ def _print_status_for(s: SessionState) -> None:
             machine_shape=s.machine_shape,
         )
     )
+    if s.running and s.activity:
+        a = s.activity
+        typer.echo(
+            f"  Running: {a.get('file')}, cell {a.get('cell')}/{a.get('total')} "
+            f"({a.get('label')}) since {a.get('started_at')}"
+        )
     if s.last_execution:
         exec_file, exec_cell, exec_time = s.last_execution
         cell_str = f" | Cell: {exec_cell}" if exec_cell else ""

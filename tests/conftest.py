@@ -33,6 +33,16 @@ def isolate_keyring():
 
 
 @pytest.fixture(autouse=True)
+def isolate_colab_log(mocker):
+    """CLI commands run in tests must not write the user's ~/.config/colab-cli/colab.log.
+
+    Tests of logging itself call common.setup_logging directly, with a
+    redirected home.
+    """
+    mocker.patch("colab_cli.cli.setup_logging")
+
+
+@pytest.fixture(autouse=True)
 def mock_common_state(mocker):
     # Patch the state singleton in common.py
     mock_state = mocker.patch("colab_cli.common.state")

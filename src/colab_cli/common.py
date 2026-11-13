@@ -14,6 +14,7 @@
 
 import contextlib
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
@@ -32,6 +33,8 @@ from colab_cli.state import (
     make_private,
     private_opener,
 )
+
+LOG_MAX_BYTES = 10 * 1024 * 1024
 
 # Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
@@ -233,6 +236,22 @@ class _RedactingFormatter(logging.Formatter):
         return redact_secrets(super().format(record))
 
 
+class _RotatingFileHandler(RotatingFileHandler):
+    """Rotates colab.log, and keeps logging when it cannot.
+
+    On Windows a file another colab process has open (the tray, a running
+    exec) cannot be renamed; the rollover is then skipped instead of printing
+    a logging error into the command's output.
+    """
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except OSError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
 def setup_logging(log_to_stderr: bool):
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logger = logging.getLogger()
@@ -243,6 +262,11 @@ def setup_logging(log_to_stderr: bool):
     requests_log.propagate = True
     # Its DEBUG output includes stdin replies to the kernel, such as passwords.
     logging.getLogger("jupyter_kernel_client").setLevel(logging.INFO)
+    # Called again in the same process (tests, embedding): replace our
+    # handlers instead of adding more, each of which wrote every line again.
+    for old in [h for h in logger.handlers if getattr(h, "_colab_cli", False)]:
+        logger.removeHandler(old)
+        old.close()
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
@@ -253,11 +277,43 @@ def setup_logging(log_to_stderr: bool):
     make_private(log_path)
     # DEBUG logs carry kernel code and output verbatim; the default encoding
     # is the Windows code page, which fails on most non-ASCII text.
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    # Rotated: long-running callers (`colab tray`) would otherwise grow it
+    # without end. 10 MB, plus colab.log.1 and .2.
+    file_handler = _RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=2,
+                                        encoding="utf-8", delay=True)
     file_handler.setFormatter(_RedactingFormatter(log_format))
+    file_handler._colab_cli = True
     logger.addHandler(file_handler)
 
     if log_to_stderr:
         stream_handler = logging.StreamHandler(sys.stderr)
         stream_handler.setFormatter(_RedactingFormatter(log_format))
+        stream_handler._colab_cli = True
         logger.addHandler(stream_handler)
+
+
+DEFAULT_CLIENT_OAUTH_CONFIG = os.path.expanduser("~/.colab-cli-oauth-config.json")
+
+
+def colab_argv(st=None) -> list:
+    """The command that runs this same CLI, with the global options in use.
+
+    For commands that drive the CLI's own subcommands as child processes
+    (`colab profile run`, the tray): the standalone binary runs itself, a
+    Python install runs ``python -m colab_cli``; --auth, --config, -c and
+    --logtostderr carry over.
+    """
+    st = st or state
+    if getattr(sys, "frozen", False):
+        argv = [sys.executable]
+    else:
+        argv = [sys.executable, "-m", "colab_cli"]
+    argv.append(f"--auth={AuthProvider(st.auth_provider).value}")
+    if st.config_path:
+        argv += ["--config", st.config_path]
+    oauth = getattr(st, "client_oauth_config", None)
+    if oauth and os.path.abspath(oauth) != os.path.abspath(DEFAULT_CLIENT_OAUTH_CONFIG):
+        argv += ["-c", oauth]
+    if getattr(st, "logtostderr", False):
+        argv.append("--logtostderr")
+    return argv

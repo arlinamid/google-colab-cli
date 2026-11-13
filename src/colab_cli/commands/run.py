@@ -375,8 +375,23 @@ def run_command(
     if not os.path.isfile(script):
         typer.echo(f"[colab] Script not found: {script}", err=True)
         raise typer.Exit(2)
-    # An undecodable script must fail before a VM is allocated.
-    read_script(script)
+    # An undecodable script (or notebook) must fail before a VM is allocated.
+    from colab_cli.jobs import is_notebook
+
+    job_payload = None
+    if detach:
+        from colab_cli.commands.job import job_files_or_exit
+
+        job_payload = job_files_or_exit(script)
+    elif is_notebook(script):
+        typer.echo(
+            "[colab] `colab run` runs a notebook only with --detach (as a "
+            "background job); or create a runtime and use `colab exec -f`.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    else:
+        read_script(script)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
     variant, accelerator, shape = resolve_runtime_options(
@@ -466,7 +481,7 @@ def run_command(
 
         typer.echo(f"[colab] Session READY ({name}). Starting {script} as a job...", err=True)
         launch_job(
-            state, name, s, file=script, source=read_script(script),
+            state, name, s, file=script, files=job_payload,
             argv=job_argv(script, None, script_args), env_vars=env_vars,
             name=None, budget=budget, json_output=json_output,
         )
@@ -497,7 +512,7 @@ def run_command(
     meter = None
     run_limit = None
     if json_output or budget is not None:
-        meter = CostMeter(state.client, accelerator=accelerator.value)
+        meter = CostMeter(state.client, accelerator=accelerator.value, settings_store=state.settings_store)
     if budget is not None:
         run_limit = meter.seconds_for(budget)
         if run_limit is None:

@@ -136,3 +136,67 @@ def test_redact_secrets_masks_query_tokens_and_bearer():
     assert "eyJabc.def" not in out
     assert "abcdefghijkl" not in out
     assert "authuser=0" in out
+
+
+def test_colab_log_rotates_and_survives_a_locked_file(tmp_path, mocker):
+    import logging
+
+    from colab_cli import common
+
+    path = tmp_path / "colab.log"
+    handler = common._RotatingFileHandler(str(path), maxBytes=200, backupCount=2, encoding="utf-8", delay=True)
+    logger = logging.getLogger("colab-rotate-test")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        for i in range(30):
+            logger.info("line %d %s", i, "x" * 40)
+        assert (tmp_path / "colab.log.1").exists() and not (tmp_path / "colab.log.3").exists()
+        assert path.stat().st_size <= 400
+
+        # Another process has the file open (Windows): the rollover is skipped.
+        mocker.patch.object(common.RotatingFileHandler, "doRollover", side_effect=PermissionError("in use"))
+        logger.info("still logged %s", "y" * 300)
+        handler.flush()
+        assert "still logged" in path.read_text(encoding="utf-8")
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+    assert common.LOG_MAX_BYTES == 10 * 1024 * 1024
+
+
+def test_setup_logging_twice_keeps_one_handler_each(tmp_path, monkeypatch):
+    """Each call replaced nothing: in one process (the tests) every line was written N times."""
+    import logging
+
+    from colab_cli import common
+
+    monkeypatch.setattr(common.os.path, "expanduser", lambda p: str(tmp_path / "cfg"))
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        common.setup_logging(log_to_stderr=True)
+        common.setup_logging(log_to_stderr=True)
+        common.setup_logging(log_to_stderr=False)
+        new = [h for h in root.handlers if h not in before]
+        assert len(new) == 1 and isinstance(new[0], common._RotatingFileHandler)
+    finally:
+        for h in [h for h in root.handlers if h not in before]:
+            root.removeHandler(h)
+            h.close()
+
+
+def test_cli_commands_in_tests_do_not_write_the_real_colab_log():
+    from colab_cli import cli, common
+
+    assert cli.setup_logging is not common.setup_logging  # conftest's isolate_colab_log
+
+
+def test_every_command_sets_up_logging(mocker):
+    from typer.testing import CliRunner
+
+    from colab_cli import cli
+
+    setup = mocker.patch.object(cli, "setup_logging")
+    CliRunner().invoke(cli.app, ["--logtostderr", "version"])
+    setup.assert_called_once_with(True)

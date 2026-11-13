@@ -27,7 +27,7 @@ import time
 
 import pytest
 
-from colab_cli.job_vm import FEEDBACK_SOURCE, RUNNER_SOURCE
+from colab_cli.job_vm import FEEDBACK_SOURCE, NOTEBOOK_SOURCE, RUNNER_SOURCE
 
 
 def _ns(source):
@@ -188,3 +188,87 @@ def test_max_seconds_stops_the_job_for_the_budget(tmp_path):
     st = _status(d)
     assert st["state"] == "stopped"
     assert st["stop_reason"] == "budget"
+
+
+def test_cell_markers_set_the_cell_and_reset_its_progress(tmp_path):
+    d = _make_job(tmp_path, """
+        import sys
+        print("##colab-cell 1/2 Setup")
+        sys.stdout.write("\\r50%|#####     | 1/2 [00:01<00:01,  1.0it/s]")
+        print()
+        print("##colab-cell 2/2 cell 2 (Train)")
+        print("training")
+    """)
+
+    assert _start(d).wait(timeout=30) == 0
+
+    st = _status(d)
+    assert st["cell"] == {"index": 2, "total": 2, "label": "cell 2 (Train)"}
+    assert st["progress"] is None  # the bar belonged to cell 1
+
+
+def test_cell_marker_needs_the_exact_form():
+    feed = _ns(RUNNER_SOURCE)["parse_cell"]
+    assert feed("##colab-cell 3/12 Setup") == {"index": 3, "total": 12, "label": "Setup"}
+    assert feed("##colab-cell 1/1") == {"index": 1, "total": 1, "label": ""}
+    assert feed("print('##colab-cell 1/2')") is None
+    assert feed("##colab-cell x/2") is None
+
+
+def _make_notebook_job(tmp_path, cells, args=(), job_id="nb1"):
+    d = tmp_path / job_id
+    (d / "lib").mkdir(parents=True)
+    (d / "runner.py").write_text(RUNNER_SOURCE, encoding="utf-8")
+    (d / "lib" / "colab_feedback.py").write_text(FEEDBACK_SOURCE, encoding="utf-8")
+    (d / "notebook.py").write_text(NOTEBOOK_SOURCE, encoding="utf-8")
+    (d / "cells.json").write_text(json.dumps(cells), encoding="utf-8")
+    argv = [sys.executable, "-u", str(d / "notebook.py"), str(d / "cells.json"), *args]
+    spec = {"id": job_id, "name": "nb", "argv": argv, "cwd": str(tmp_path)}
+    (d / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    return d
+
+
+_CELLS = [
+    {"label": "cell 1 (Setup)", "source": "import sys\nx = 41"},
+    {"label": "cell 2", "source": "print('x is', x + 1, sys.argv[1:])"},
+    {"label": "cell 3 (Boom)", "source": "1 / 0"},
+    {"label": "cell 4", "source": "print('never')"},
+]
+
+
+@pytest.mark.parametrize("ipython", [True, False], ids=["ipython", "plain"])
+def test_notebook_job_runs_cells_in_order_and_stops_at_an_error(tmp_path, ipython):
+    if ipython:
+        pytest.importorskip("IPython")
+    d = _make_notebook_job(tmp_path, _CELLS, args=["--lr", "1"])
+    extra = {} if ipython else {"COLAB_NOTEBOOK_PLAIN": "1"}
+
+    assert _start(d, **extra).wait(timeout=60) == 0
+
+    st = _status(d)
+    assert st["state"] == "failed" and st["exit_code"] == 1
+    assert st["cell"] == {"index": 3, "total": 4, "label": "cell 3 (Boom)"}
+    log = (d / "output.log").read_bytes().decode("utf-8")
+    assert "x is 42 ['--lr', '1']" in log
+    assert "Traceback (most recent call last):" in log
+    assert "ZeroDivisionError" in log
+    assert "never" not in log and "##colab-cell 4/4" not in log
+
+
+def test_notebook_job_with_ipython_syntax(tmp_path):
+    pytest.importorskip("IPython")
+    d = _make_notebook_job(tmp_path, [
+        {"label": "cell 1", "source": "%time y = 2"},
+        {"label": "cell 2", "source": "print('y', y)"},
+    ])
+
+    assert _start(d).wait(timeout=60) == 0
+
+    st = _status(d)
+    assert st["state"] == "succeeded", (d / "output.log").read_text(encoding="utf-8")
+    assert "y 2" in (d / "output.log").read_text(encoding="utf-8")
+
+
+def test_notebook_source_is_plain_python_without_cli_imports():
+    compile(NOTEBOOK_SOURCE, "<vm>", "exec")
+    assert "colab_cli" not in NOTEBOOK_SOURCE

@@ -80,6 +80,8 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - **Report progress from Python**: `from colab_feedback import report, note` (already on the job's path), then `report(step=i, loss=l, val_acc=a)` and `note("switched lr")`. Outside a job they do nothing. tqdm bars are read automatically.
 - **Check without blocking**: `colab job status -s <name> [ID] --json` (default: the newest job) gives `state` (`starting`/`running`/`stopping`/`succeeded`/`failed`/`stopped`), `progress` (`percent`, `n`, `total`, `eta_s`), `metrics.last` and `metrics.trend` (first/last/min/max per metric), `tail` (last lines of output), `silent_s`, `stalled` (true after `--stall-after`, default 600 s, without output) and `diagnosis`. A failed job gets the same diagnosis codes and `next_actions` as `--json` exec results (read from the traceback in its output); a stalled one gets code `stalled`.
 - **Block until done**: `colab job wait -s <name> ID [--interval 30] [--timeout S] --json` keeps the runtime alive while waiting and exits with the job's own code (130 if stopped, 4 if `--timeout` passed; the job keeps running).
+- **Notebooks as jobs**: `colab job start -s <name> -f nb.ipynb` runs the notebook's code cells in order in IPython on the VM (`!`/`%` lines work; the first failing cell ends the job); status `cell` is `{index, total, label}`.
+- **Overall progress**: in the script, `report(epoch=2, epochs=5, loss=...)` or `report(step=..., total=...)`; status then has `overall_percent` (0-100) and `epoch`, besides the tqdm `progress` of the current bar. `last_output_age_s` says how long ago output came.
 - **Other**: `colab job tail -s <name> ID [-n 50] [--follow]`, `colab job stop -s <name> ID` (SIGTERM, SIGKILL after 10 s), `colab job list -s <name> [--json]`. Full output: `colab download -s <name> /content/.colab-jobs/ID/output.log out.log`.
 - **Loop for agents**: start, then poll `status --json` every few minutes; act on `stalled`, a falling/rising metric trend, or `state: failed` + `diagnosis.next_actions`; `stop` and restart with a fix if needed.
 
@@ -116,6 +118,12 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - `colab log -s <name> -o summary.ipynb` exports the session as a notebook (also `.md`, `.txt`, `.jsonl` by suffix).
 - `colab url -s <name>` prints a browser URL that attaches the Colab web UI to your existing CLI session instead of allocating a new VM (add `--open` to launch it).
 - `colab skill` / `colab readme` print this skill and the README (handy for self-discovery).
+
+### Profiles and the tray (`colab profile`, `colab tray`)
+
+- **Profiles** (`colab profile list --json`, `show NAME`, `path`): saved run setups in `profiles.toml`. `colab profile run NAME` in job mode starts the script or notebook as a background job and returns (follow it with `colab job`); in kernel mode it runs `colab exec`, then keeps a `colab forward` open until interrupted, so don't run a kernel profile with `forward` from an agent unless you mean to block. A profile allocates a runtime unless its `session` is alive: treat it like `colab new`.
+- **`colab exec --var NAME=JSON`** sets a Python global before the first cell (e.g. override a notebook's `#@param` settings).
+- **One-shot overview**: `colab tray --snapshot --json` gives every runtime with its newest job (state, `overall_percent`, epoch/cell, main metric, last-output age, diagnosis), the account balance, rate and estimated hours left, and an `icon.level` (`none`/`idle`/`running`/`warning`/`error`/`stale`). It reads job files only and never keeps a runtime alive. The GUI (`colab tray`) is for people.
 
 ## Safety
 - **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.

@@ -195,3 +195,116 @@ def test_budget_stop_has_a_diagnosis():
 def test_start_code_carries_max_seconds():
     code = build_start_code("j-3", name="j", argv=["sleep", "9"], env={}, max_seconds=1800.0)
     assert "'max_seconds': 1800.0" in code
+
+
+# --- progress across the whole run, notebook jobs (docs/09) ---
+
+def _rec(status=None, metrics=(), now=1600.0):
+    st = dict(STATUS, **(status or {}))
+    return job_record(st, metrics=list(metrics), tail="", now=now, stall_after=600, session="s")
+
+
+def test_overall_percent_from_epochs_and_the_bar_inside_the_epoch():
+    rec = _rec(metrics=[{"t": 1, "epoch": 2, "epochs": 5, "loss": 0.3}])
+    # epoch 2 of 5 running, its bar at 40%: (1 + 0.4) / 5
+    assert rec["overall_percent"] == 28.0
+    assert rec["epoch"] == {"current": 2, "total": 5}
+    assert set(rec["metrics"]["trend"]) == {"loss"}
+
+
+def test_overall_percent_from_step_and_total():
+    rec = _rec({"progress": None}, metrics=[{"t": 1, "step": 30, "total": 120}])
+    assert rec["overall_percent"] == 25.0
+    assert rec["epoch"] is None
+
+
+def test_overall_percent_from_notebook_cells():
+    rec = _rec({"cell": {"index": 3, "total": 4, "label": "cell 3"},
+                "progress": {"percent": 50, "n": None, "total": None, "eta_s": None}})
+    assert rec["overall_percent"] == 62.5
+    assert rec["cell"] == {"index": 3, "total": 4, "label": "cell 3"}
+
+
+def test_overall_percent_falls_back_to_the_bar_or_none():
+    assert _rec()["overall_percent"] == 40.0
+    assert _rec({"progress": None})["overall_percent"] is None
+    assert _rec({"progress": None})["cell"] is None
+
+
+def test_overall_percent_is_100_when_succeeded_and_clamped():
+    assert _rec({"state": "succeeded", "ended_at": 1600.0, "exit_code": 0})["overall_percent"] == 100.0
+    rec = _rec(metrics=[{"t": 1, "epoch": 9, "epochs": 5}])
+    assert rec["overall_percent"] == 100.0
+
+
+def test_last_output_age_also_after_the_job_ended():
+    assert _rec()["last_output_age_s"] == 100.0
+    done = _rec({"state": "failed", "ended_at": 1550.0, "exit_code": 1}, now=1700.0)
+    assert done["silent_s"] is None and done["last_output_age_s"] == 200.0
+    assert _rec({"last_output_at": None, "started_at": None})["last_output_age_s"] is None
+
+
+def test_job_argv_for_a_notebook():
+    assert job_argv("nb.ipynb", None, ["--x"]) == [
+        "{python}", "-u", "{dir}/notebook.py", "{dir}/cells.json", "--x",
+    ]
+
+
+def _write_nb(path, cells):
+    import nbformat
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells = cells
+    nbformat.write(nb, str(path))
+
+
+def test_notebook_cells_and_job_files(tmp_path):
+    import nbformat
+
+    from colab_cli.job_vm import NOTEBOOK_SOURCE
+    from colab_cli.jobs import job_files, notebook_cells
+
+    path = tmp_path / "train.ipynb"
+    _write_nb(path, [
+        nbformat.v4.new_markdown_cell("# Title"),
+        nbformat.v4.new_code_cell("#@title Setup\n!pip install -q x\nimport x"),
+        nbformat.v4.new_code_cell("   \n"),
+        nbformat.v4.new_code_cell("x.train()"),
+    ])
+
+    cells = notebook_cells(str(path))
+    assert [c["label"] for c in cells] == ["cell 1 (Setup)", "cell 3"]
+    assert cells[0]["source"].startswith("#@title Setup\n!pip")
+
+    files = job_files(str(path))
+    assert files["notebook.py"] == NOTEBOOK_SOURCE
+    data = json.loads(files["cells.json"])
+    assert data["name"] == "train.ipynb" and data["cells"] == cells
+
+    script = tmp_path / "s.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    assert job_files(str(script)) == {"script.py": "print(1)\n"}
+
+
+def test_start_code_writes_extra_files(tmp_path, monkeypatch):
+    import contextlib
+    import io
+    import subprocess
+
+    class FakePopen:
+        pid = 1
+
+        def __init__(self, argv, **kw):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    code = build_start_code(
+        "j-3", name="nb", argv=["{python}", "-u", "{dir}/notebook.py", "{dir}/cells.json"],
+        env={}, files={"notebook.py": "print('nb')\n", "cells.json": "[]"},
+        jobs_dir=str(tmp_path).replace("\\", "/"),
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        exec(compile(code, "<start>", "exec"), {})
+    assert (tmp_path / "j-3" / "notebook.py").read_text() == "print('nb')\n"
+    assert (tmp_path / "j-3" / "cells.json").read_text() == "[]"
+    assert (tmp_path / "j-3" / "runner.py").exists()

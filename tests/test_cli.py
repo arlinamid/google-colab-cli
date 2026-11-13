@@ -832,8 +832,8 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
 @pytest.mark.parametrize(
     "still_recorded, expected",
     [
-        (False, "Session 'qwen21' was stopped, so the running command ended."),
-        (True, "check it with `colab status -s qwen21`"),
+        (False, "Session 'webui' was stopped, so the running command ended."),
+        (True, "check it with `colab status -s webui`"),
     ],
     ids=["stopped", "disconnected"],
 )
@@ -846,7 +846,7 @@ def test_main_explains_a_lost_connection(
     from colab_cli import cli
     from colab_cli.runtime import SessionConnectionLost
 
-    mocker.patch.object(cli, "app", side_effect=SessionConnectionLost("qwen21"))
+    mocker.patch.object(cli, "app", side_effect=SessionConnectionLost("webui"))
     mock_common_state.store.get.return_value = (
         MagicMock() if still_recorded else None
     )

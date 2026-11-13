@@ -16,7 +16,7 @@ import contextlib
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional, Tuple, Iterator, IO
+from typing import Any, Dict, Optional, Tuple, Iterator, IO
 
 import filelock
 from pydantic import BaseModel
@@ -35,6 +35,14 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    # What a foreground `colab exec` is running now: file, cell (from 1),
+    # total, label and started_at (ISO). Read by `colab status` and the tray
+    # without touching the runtime.
+    activity: Optional[Dict[str, Any]] = None
+    # Set by `colab profile run`: the profile, and whether the tray stops the
+    # runtime once its job has ended.
+    profile: Optional[str] = None
+    stop_when_done: Optional[bool] = None
 
 
 class Settings(BaseModel):
@@ -50,6 +58,24 @@ class Settings(BaseModel):
     latest_version: Optional[str] = None
     # Wheel of that fork release, installed by `colab update --install`.
     latest_wheel_url: Optional[str] = None
+    # `colab tray` (docs/09): refresh interval, notifications, panel language
+    # ("auto", "hu", "en") and the profile its main button starts.
+    tray_interval: Optional[float] = None
+    tray_notifications: bool = True
+    tray_language: str = "auto"
+    tray_last_profile: Optional[str] = None
+    # Warn when the balance lasts less than this many hours at the current
+    # rate, or a runtime has been idle this many minutes (Colab reclaims
+    # idle runtimes at about 90).
+    tray_low_balance_hours: float = 1.0
+    tray_idle_warn_minutes: float = 75.0
+    # Ask before a profile starts (it names the hardware and the rate).
+    tray_confirm_start: bool = True
+    # Terminal for Log/SSH: "" is automatic, else a command with {cmd}.
+    tray_terminal: str = ""
+    # Hourly compute-unit rate per accelerator ("NONE", "T4", ...), learned
+    # whenever a runtime was the only one (cost.py), for per-runtime budgets.
+    cost_rates: Dict[str, float] = {}
 
 
 _OWNER_ONLY_MODE = 0o600
@@ -73,6 +99,8 @@ class _LockedFileStore:
     def __init__(self, path: str):
         self.path = path
         self.lock_path = "%s.lock" % self.path
+        # Before the lock: filelock opens the lock file in its constructor.
+        self._ensure_dir()
         # ReadWriteLock gives us shared (concurrent) readers and exclusive
         # writers -- the cross-platform equivalent of fcntl LOCK_SH/LOCK_EX.
         # is_singleton=False keeps each store's lock independent: with the
@@ -81,7 +109,6 @@ class _LockedFileStore:
         # guard then raises RuntimeError when two threads contend for the write
         # lock. We want them to actually serialize via the underlying file lock.
         self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
-        self._ensure_dir()
         make_private(self.path)
 
     def _ensure_dir(self):
