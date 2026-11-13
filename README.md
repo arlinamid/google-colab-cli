@@ -5,19 +5,31 @@ A command-line interface for Google Colab. Provision high-performance CPU, GPU, 
 Designed to support seamless developer productivity, headless automation, and AI agent integrations.
 
 > [!IMPORTANT]
-> **This is a fork** of Google's [googlecolab/google-colab-cli](https://github.com/googlecolab/google-colab-cli), not the official release. It tracks Google's code and stays as close to it as possible; the differences are:
->
-> * **Windows fixes:** Drive mount consent, `colab edit` temp files and `$EDITOR` paths, `colab ssh`/`colab forward` from Git Bash (Windows OpenSSH), ssh `ProxyCommand` quoting.
-> * **Any language/code page:** scripts are read like Python source (coding cookie or UTF-8), and redirected output is UTF-8, so non-ASCII text works on every Windows system.
-> * **`colab exec`:** `--cells`, `--stop-on-error`, `--check`/`--check-only`, exit code 1 on errors; `--timeout` (exec, run) has no default limit, and when set it interrupts the kernel after that many seconds without output.
-> * **New commands:** `colab secret`, `--secret`, `colab ssh -L`/`colab forward`, `colab share` (cloudflared/ngrok), `colab keepalive`, `colab hf`, `colab clone`.
-> * **Tray panel and profiles:** `colab tray` (optional `[tray]` extra) shows the runtimes, their progress and the compute units left in the system tray, and starts saved run profiles (`colab profile`): a script or notebook as a background job, or a server in the kernel with a port forward. See [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md).
-> * **Feedback for AI agents:** `--json` results for `exec`, `run`, `usage` and `job` (failing line in your file, a diagnosis code and the commands to try next), background jobs with `colab job` and `colab run --detach`, `colab inspect` (variables, GPU, disk, packages), a compute-unit `--budget`, and `colab history` (recurring failures and what fixed them). See [docs/08_agent_feedback.md](docs/08_agent_feedback.md).
-> * **Updates:** `colab update` offers and installs this fork's releases; a newer Google release is only announced, so an update never replaces the fork with Google's package.
->
-> Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes. Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's). See [CHANGELOG.md](CHANGELOG.md).
+> **This is a fork** of Google's [googlecolab/google-colab-cli](https://github.com/googlecolab/google-colab-cli), not the official release. It is built on Google's code and keeps every command of it; what it adds is listed under [What this fork adds](#what-this-fork-adds). Releases are published on [GitHub](https://github.com/arlinamid/google-colab-cli/releases), not on PyPI (the `google-colab-cli` package there is Google's).
 
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
+
+## What this fork adds
+
+Google's CLI provisions runtimes and runs code on them from Linux and macOS. This fork runs the same commands **on Windows too**, and adds what long or unattended work needs: background jobs you can follow, results scripts and AI agents can read, a desktop panel, saved run setups and a watch on compute units.
+
+| | Google's Colab CLI 0.8.0 | This fork (0.8.0.N) |
+|---|---|---|
+| **Platforms** | Linux, macOS ("Windows is not supported") | Linux, macOS **and Windows** (PowerShell, cmd.exe, Git Bash): Drive mount, `colab edit`, `colab ssh`/`forward` with Windows OpenSSH, any code page |
+| **Desktop** | — | **`colab tray`**: a tray icon and panel with every runtime's progress, ETA, loss trend, compute units left, Log/SSH/Stop, notifications, start with the computer |
+| **Saved setups** | — | **`colab profile`**: a script or notebook as a background job, or a server in the kernel with port forwards and a ready check, started with one command or click; the runtime stops itself when the job ends |
+| **Long runs** | `colab exec` / `colab run` stay attached | **`colab job`** and `colab run --detach`: start, follow (`status`, `tail`, `wait`), stop; progress over the whole run (epochs, notebook cells) |
+| **Scripts and AI agents** | text output | **`--json`** records with the failing line in your file, a diagnosis code and the commands to try next; `colab inspect` (variables, GPU, disk, packages); `colab history` (recurring failures and what fixed them) |
+| **Cost** | `colab usage` | a compute-unit **`--budget`** that stops the run, estimates per runtime, a low-balance warning |
+| **Execution control** | run the whole file | `--cells`, `--stop-on-error`, `--check`/`--check-only`, `--var NAME=JSON`; `--timeout` has no default limit and interrupts the kernel when set |
+| **Secrets and networking** | — | `colab secret` / `--secret`, `colab ssh -L` / `colab forward`, `colab share` (cloudflared, ngrok), `colab keepalive`, `colab hf`, `colab clone` |
+| **Updates** | from PyPI | `colab update` installs this fork's releases; a newer Google release is announced, never installed over the fork |
+
+![The tray panel while a profile trains on a CPU runtime: epoch 2 of 5, the loss falling, the runtime's rate and the balance](docs/images/tray_panel_training.png)
+
+Commands only in this fork: `colab tray`, `colab profile`, `colab job`, `colab inspect`, `colab history`, `colab secret`, `colab forward`, `colab share`, `colab keepalive`, `colab hf`, `colab clone`. Design notes: [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md) (tray, profiles, progress), [docs/08_agent_feedback.md](docs/08_agent_feedback.md) (JSON results, jobs, inspect, cost, history).
+
+Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes, so Google's next release (0.8.1) still sorts above it. Google's changes are merged in when they are released. See [CHANGELOG.md](CHANGELOG.md).
 
 > [!NOTE]
 > **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.

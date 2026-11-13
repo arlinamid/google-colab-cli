@@ -293,6 +293,11 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
 
 ## Not done
 
-- Starting the tray at login.
 - The panel on a real Linux desktop and on macOS was not tried (unit tests
-  only); on Windows it was rendered offscreen.
+  only; the autostart entries for both are tested as files). On Windows the
+  tray ran on a real desktop (a CPU job profile, a GPU kernel profile); writing the
+  sign-in Run key was tested with a fake registry and is checked by the
+  user.
+- A second `colab profile run NAME` from another terminal is not refused
+  while the first is still creating its runtime; only the tray guards
+  against a second start.
