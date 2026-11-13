@@ -84,10 +84,11 @@ def stop_argv(card: Dict[str, Any], choice: str) -> List[str]:
     return ["stop", "-s", card["name"]]
 
 
-def log_argv(card: Dict[str, Any]) -> List[str]:
+def log_argv(card: Dict[str, Any], follow: bool = False) -> List[str]:
+    """The job's last output (``--follow``: and new lines), else the session history."""
     if card["job_id"]:
-        return ["job", "tail", "-s", card["name"], card["job_id"], "--follow"]
-    return ["log", "-s", card["name"]]
+        return ["job", "tail", "-s", card["name"], card["job_id"], "-n", "200", *(["--follow"] if follow else [])]
+    return ["log", "-s", card["name"], "-n", "200"]
 
 
 def ssh_argv(card: Dict[str, Any]) -> List[str]:

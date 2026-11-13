@@ -269,17 +269,23 @@ def test_a_forwarded_runtime_gets_an_open_button(tray, mocker):
     opened.assert_called_once_with("http://127.0.0.1:8188")
 
 
-def test_log_opens_a_terminal_that_stays_open(tray, mocker):
-    import sys
+def test_log_opens_a_window_with_help(tray, mocker):
+    from colab_cli.tray import windows
 
-    _render(tray, [_entry("webui", None)])
-    card = tray.view(now=NOW)["cards"][0]["card"]
+    mocker.patch.object(windows.LogWindow, "start")
+    _render(tray, [_entry("webui", None), _entry("t", _job())])
+    cards = [c["card"] for c in tray.view(now=NOW)["cards"]]
 
-    tray.in_terminal(tray_app.actions.log_argv(card))
+    w = tray.open_log(cards[0])
+    assert w.windowTitle() == "Napló: webui"
+    assert "helyi előzményekből" in w.help.text() and not w.follow.isVisible()
+    assert w.command(False)[-5:] == ["colab", "log", "-s", "webui", "-n", "200"][-5:]
 
-    cmd = tray.popen.call_args.args[0]
-    assert sys.executable in cmd and "colab_cli.tray.hold" in cmd
-    assert cmd[-4:] == ["colab", "log", "-s", "webui"]
+    job = tray.open_log(cards[1])
+    assert "train-1" in job.help.text() and job.follow.isChecked()
+    assert job.command(True)[-1] == "--follow" and "--follow" not in job.command(False)
+    w.close()
+    job.close()
 
 
 def test_header_has_one_settings_and_a_refresh_icon_and_profiles_can_be_edited(tray):
@@ -288,8 +294,9 @@ def test_header_has_one_settings_and_a_refresh_icon_and_profiles_can_be_edited(t
     assert rows == []  # settings only behind the gear
     assert tray.panel.refresh_button.toolTip() == "Frissítés most"
     assert tray.panel.gear.toolTip() == "Beállítások"
-    # No profiles: the main button creates one in the editor.
+    # No profiles: the main button opens the editor with a new profile.
     assert tray.panel.profile_button.text().strip() == "Profil létrehozása…"
     tray.panel.profile_button.click()
-    cmd = tray.popen.call_args.args[0]
-    assert cmd[-2:] == ["profile", "edit"] and "colab_cli.tray.hold" in cmd
+    editors = [w for w in tray.windows if w.windowTitle() == "Colab CLI profilok"]
+    assert len(editors) == 1 and editors[0].name.text() == ""
+    editors[0].close()

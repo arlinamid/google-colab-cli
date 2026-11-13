@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: The tray's own windows with help (`tray/windows.py`): a profile editor (list, a form whose fields follow the mode, file pickers, help for the focused field, validation that marks the field; saves through `profiles.py`, "Save and start", "Edit as text") and a log window (runs `colab job tail [-F]` or `colab log` with QProcess, Follow, Refresh, Copy; ANSI codes and progress-bar redraws are cleaned). Form logic without Qt: `tray/profile_form.py`. SSH stays in a terminal (interactive).
 2026-11-13: `colab profile edit` (opens profiles.toml in $VISUAL/$EDITOR, creating it with commented examples, then validates it); the panel's profile menu has "Edit profiles…" and, with no profiles, the main button creates one. Refresh and Settings are icons in the header (no duplicate rows). Terminal actions (Log, SSH, job tail, profile edit) run through `python -m colab_cli.tray.hold`, so the window waits for Enter instead of closing when the command ends (Windows).
 2026-11-13: Open port forwards are detected (`forwards.py`): the ssh processes that `colab forward` / `colab ssh -L` start (any tool, any CLI version) are found in the local process list, matched by session name and sessions file, and their local ports checked with a TCP connect. A runtime behind a forward is a service with an Open button. Live: the forward of a web UI (started by an older global `colab`) showed as a T4 service with `forward 8188`. Also fixed after the first try on a real desktop: sessions.json is read again on every refresh (a runtime created after the tray started was shown as an orphan), orphan cards have no actions, dialogs open on top of the panel.
 2026-11-13: Initial design and implementation: progress over the whole run (`overall_percent`, epochs, notebook cells), notebooks as background jobs, `colab exec --var`, run profiles (`profiles.toml`, `colab profile`), the tray snapshot (`tray_model.py`, `colab tray --snapshot`) and the Qt tray panel (`colab tray`, the `[tray]` extra). Live: `integration/repro_tray_profiles/test.sh` (job profile with a snapshot while it runs and after, a notebook job with a `!` cell, a kernel profile that reuses the runtime and sets vars) and a kernel profile that forwards a web server (ready check through `colab forward`). The panel is checked offscreen in tests; on a real desktop it was not yet checked by a person.
@@ -195,6 +196,18 @@ icon on Linux without PyGObject (StatusNotifier), and native SVG.
   runtime keeps running and using CU) or the whole runtime (unsaved files
   are lost; a forward or service the tray started is closed too). Without a
   running job only the runtime can be stopped.
+- **Log** opens a window that runs `colab job tail -n 200` (Follow adds
+  `--follow` while the job runs) or, without a job, `colab log -n 200`, and
+  shows the output as it comes; a help line says what it shows and where the
+  full log is. **SSH** opens a terminal (an interactive shell needs one); it
+  waits for Enter when the shell ends (`python -m colab_cli.tray.hold`).
+- **Edit profiles** (in the profile menu, or the main button when there are
+  none) opens the profile editor: the profiles on the left; on the right a
+  form whose fields follow the mode (job: arguments, budget; kernel: Python
+  variables, forwards, SSH key, URLs), file pickers for the script and the
+  key, and a help box for the field in focus (the same text as its tooltip).
+  Saving validates through the Profile model and marks the wrong field;
+  "Save and start" starts it; "Edit as text" opens `colab profile edit`.
 - **Start profile** asks first, naming the mode, hardware, the account's
   current rate and the session it reuses. The tray runs
   `colab profile run NAME` as a child (output in `tray-logs/NAME.log`); a

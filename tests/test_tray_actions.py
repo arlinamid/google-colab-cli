@@ -81,8 +81,9 @@ def test_stop_options_say_what_stops():
 
 
 def test_log_and_ssh_commands():
-    assert a.log_argv(_card()) == ["job", "tail", "-s", "train-t4", "train-1", "--follow"]
-    assert a.log_argv(_card(job_id=None)) == ["log", "-s", "train-t4"]
+    assert a.log_argv(_card()) == ["job", "tail", "-s", "train-t4", "train-1", "-n", "200"]
+    assert a.log_argv(_card(), follow=True)[-1] == "--follow"
+    assert a.log_argv(_card(job_id=None)) == ["log", "-s", "train-t4", "-n", "200"]
     assert a.ssh_argv(_card()) == ["ssh", "-s", "train-t4"]
 
 

@@ -104,14 +104,15 @@ class TrayApp(QObject):
         self.tray.setToolTip(t(self.lang, "tooltip.prefix"))
 
         self.panel = Panel()
-        self.panel.log_clicked.connect(lambda c: self.in_terminal(actions.log_argv(c)))
+        self.panel.log_clicked.connect(self.open_log)
         self.panel.ssh_clicked.connect(lambda c: self.in_terminal(actions.ssh_argv(c)))
         self.panel.open_clicked.connect(self.open_service)
         self.panel.stop_clicked.connect(self.ask_stop)
         self.panel.profile_clicked.connect(self.start_profile)
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
-        self.panel.edit_profiles_clicked.connect(lambda: self.in_terminal(["profile", "edit"]))
+        self.panel.edit_profiles_clicked.connect(self.open_profiles)
+        self.windows = []  # open log / editor windows (kept alive here)
         self.panel.quit_clicked.connect(self.quit)
 
         self.timer = QTimer(self)
@@ -262,6 +263,49 @@ class TrayApp(QObject):
             subprocess.Popen(cmd, **kw)
         except OSError as e:
             self.notify(str(e), QSystemTrayIcon.Warning)
+
+    def _show_window(self, window):
+        self.windows = [w for w in self.windows if w.isVisible()]
+        self.windows.append(window)
+        self.panel.hide()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def open_log(self, card):
+        """The log window: the job's output (followed) or the session's history."""
+        from colab_cli.tray.windows import LogWindow
+
+        base = colab_argv(self.state)
+        if card.get("job_id"):
+            job = card["job_id"]
+            help_text = t(self.lang, "log.help_job", job=job, name=card["name"])
+
+            def command(follow):
+                return [*base, *actions.log_argv(card, follow=follow)]
+        else:
+            help_text = t(self.lang, "log.help_session", name=card["name"])
+
+            def command(follow):
+                return [*base, *actions.log_argv(card)]
+        return self._show_window(LogWindow(
+            t(self.lang, "log.title", name=card["name"]), help_text, command, self.lang,
+            can_follow=bool(card.get("job_id") and card.get("can_stop_job")),
+        ))
+
+    def open_profiles(self):
+        from colab_cli.tray.windows import ProfileEditor
+
+        for w in self.windows:
+            if isinstance(w, ProfileEditor) and w.isVisible():
+                w.raise_()
+                w.activateWindow()
+                return w
+        return self._show_window(ProfileEditor(
+            profiles_path(self.state.config_path), self.lang, on_start=self.start_profile,
+            on_text=lambda: self.in_terminal(["profile", "edit"]),
+        ))
 
     def open_service(self, card):
         p = self.profiles.get(card.get("profile"))
