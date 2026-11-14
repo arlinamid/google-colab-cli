@@ -52,7 +52,7 @@ def logo_pixmap(height: int) -> QPixmap:
 
 
 def status_icon(color: str, size: int = 64) -> QIcon:
-    """A square tray icon: the logo, and a dot of ``color`` in the corner."""
+    """A square tray icon: the logo, and a dot of ``color`` in the bottom-right corner."""
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
@@ -65,6 +65,6 @@ def status_icon(color: str, size: int = 64) -> QIcon:
     d = size * 0.42
     p.setPen(QPen(QColor("#202124"), size * 0.06))
     p.setBrush(QColor(color))
-    p.drawEllipse(QRectF(size - d - 1, 1, d, d))
+    p.drawEllipse(QRectF(size - d - 1, size - d - 1, d, d))
     p.end()
     return QIcon(pix)
