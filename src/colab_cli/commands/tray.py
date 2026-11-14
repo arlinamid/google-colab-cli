@@ -19,6 +19,8 @@ runs only when started, as its own process. The GUI needs the optional
 `[tray]` extra (PySide6); `--snapshot` works without it.
 """
 
+import logging
+import ntpath
 import os
 import platform
 import subprocess
@@ -37,6 +39,12 @@ INSTALL_HINT = (
     'uv tool install --force "google-colab-cli[tray] @ '
     'git+https://github.com/arlinamid/google-colab-cli"'
 )
+
+
+logger = logging.getLogger(__name__)
+
+# Set in a tray started without a window, so it never starts itself again.
+DETACHED_ENV = "COLAB_TRAY_DETACHED"
 
 
 def _config_dir() -> str:
@@ -58,6 +66,94 @@ def _gui_problem(system=None, env=None, release=None):
         if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
             return "no display (DISPLAY / WAYLAND_DISPLAY is not set)."
     return None
+
+
+def _detach_kwargs() -> dict:
+    """Popen kwargs for a tray that runs on with no window and no terminal."""
+    kwargs = {
+        "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+        "env": {**os.environ, DETACHED_ENV: "1"},
+    }
+    if sys.platform == "win32":
+        # A hidden console of its own, not DETACHED_PROCESS: Windows ignores
+        # CREATE_NO_WINDOW next to DETACHED_PROCESS, and the binary's
+        # unpacked child would then open a console window of its own.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
+
+
+def _console_is_ours(pids, me: int, images, own_exes) -> bool:
+    """True if only this CLI is attached to its console: nobody would read it.
+
+    ``pids`` are the processes on the console and ``images`` their executable
+    paths. Besides this process, only its launchers may be there (the
+    binary's onefile launcher; uv's colab.exe and the venv's python.exe),
+    whose images are among ``own_exes``. A shell there means a terminal.
+    """
+    if me not in pids:
+        return False
+    own = {ntpath.normcase(e) for e in own_exes}
+    for pid in set(pids) - {me}:
+        exe = images.get(pid)
+        if not exe or ntpath.normcase(exe) not in own:
+            return False
+    return True
+
+
+def _own_images(executable, base_executable, argv0) -> set:
+    """The executables this CLI may run through: Python, and the launcher
+    named by argv[0] (uv's colab.exe gives argv[0] without .exe)."""
+    own = {e for e in (executable, base_executable) if e}
+    if argv0:
+        launcher = ntpath.abspath(argv0)
+        own.add(launcher)
+        if not ntpath.splitext(launcher)[1]:
+            own.add(launcher + ".exe")
+    return own
+
+
+def _process_image(pid: int):
+    """The executable path of process ``pid`` (Windows), or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buf))
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return buf.value
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _owns_console() -> bool:
+    """Windows: the tray got a console window of its own (Run key, shortcut)."""
+    if sys.platform != "win32" or os.environ.get(DETACHED_ENV):
+        return False
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.GetConsoleWindow():
+            return False
+        pids = (ctypes.c_uint32 * 16)()
+        n = kernel32.GetConsoleProcessList(pids, 16)
+        on_console = list(pids)[: min(n, 16)]
+        images = {pid: _process_image(pid) for pid in on_console if pid != os.getpid()}
+        own = _own_images(sys.executable, getattr(sys, "_base_executable", None), sys.argv[0])
+        ours = _console_is_ours(on_console, os.getpid(), images, own)
+        logger.debug("tray console: me=%s on it=%s own=%s -> ours=%s", os.getpid(), images, own, ours)
+        return ours
+    except Exception:
+        logger.debug("tray console check failed", exc_info=True)
+        return False
 
 
 def _load_gui():
@@ -214,14 +310,12 @@ def tray(
         typer.echo(f"[colab] The tray needs the [tray] extra ({e}). Install it with:\n  {INSTALL_HINT}", err=True)
         raise typer.Exit(2)
 
-    if detach:
+    # Started at sign-in or from a shortcut, the tray has a console window
+    # that nobody reads and that would stay open all session (Windows):
+    # start it again without one; this process exits and the window closes.
+    if detach or _owns_console():
         argv = [*colab_argv(), "tray", "--interval", f"{interval:g}"]
-        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)
+        subprocess.Popen(argv, **_detach_kwargs())
         typer.echo("[colab] The tray is starting in the background.")
         return
 

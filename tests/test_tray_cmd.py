@@ -148,6 +148,64 @@ def test_detach_starts_itself_in_the_background(mocker, mock_common_state):
         assert kw["start_new_session"] is True
 
 
+def test_detach_on_windows_opens_no_console_window(mocker):
+    """DETACHED_PROCESS would cancel CREATE_NO_WINDOW, and the binary's
+    unpacked child would then open a console window of its own."""
+    mocker.patch.object(tray_cmd.sys, "platform", "win32")
+    mocker.patch.object(tray_cmd.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True)
+    mocker.patch.object(tray_cmd.subprocess, "DETACHED_PROCESS", 0x00000008, create=True)
+    mocker.patch.object(tray_cmd.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True)
+
+    kw = tray_cmd._detach_kwargs()
+
+    assert kw["creationflags"] & 0x08000000
+    assert not kw["creationflags"] & 0x00000008
+    assert kw["env"][tray_cmd.DETACHED_ENV] == "1"
+
+
+def test_a_detached_tray_never_starts_itself_again(mocker, monkeypatch):
+    mocker.patch.object(tray_cmd.sys, "platform", "win32")
+    monkeypatch.setenv(tray_cmd.DETACHED_ENV, "1")
+
+    assert tray_cmd._owns_console() is False
+
+
+COLAB_EXE = r"C:\bin\colab.exe"
+VENV_PY = r"C:\venv\Scripts\python.exe"
+CMD = r"C:\Windows\System32\cmd.exe"
+
+
+@pytest.mark.parametrize("pids, images, expected", [
+    ([10], {}, True),                                  # python.exe started from Explorer
+    ([10, 9], {9: COLAB_EXE}, True),                   # the binary's onefile launcher
+    ([10, 9, 8], {9: VENV_PY, 8: COLAB_EXE}, True),    # uv's colab.exe -> venv python.exe -> python
+    ([10, 9], {9: CMD}, False),                        # run in a terminal
+    ([10, 9, 8], {9: COLAB_EXE, 8: CMD}, False),       # launcher inside a terminal
+    ([10, 9], {9: None}, False),                       # a process we cannot inspect
+    ([], {}, False),                                   # no console (pythonw.exe)
+])
+def test_console_is_ours(pids, images, expected):
+    own = {r"c:\bin\colab.exe", r"c:\venv\scripts\python.exe"}
+    assert tray_cmd._console_is_ours(pids, me=10, images=images, own_exes=own) is expected
+
+
+def test_tray_in_its_own_console_starts_hidden(mocker, mock_common_state):
+    """At sign-in or from a shortcut the tray gets a console window of its
+    own: it starts itself without one and exits, so the window closes."""
+    mocker.patch.object(tray_cmd, "_gui_problem", return_value=None)
+    run_tray = MagicMock()
+    mocker.patch.object(tray_cmd, "_load_gui", return_value=run_tray)
+    mocker.patch.object(tray_cmd, "_owns_console", return_value=True)
+    mocker.patch.object(tray_cmd, "colab_argv", return_value=["colab", "--auth=oauth2"])
+    popen = mocker.patch.object(tray_cmd.subprocess, "Popen")
+
+    result = runner.invoke(app, ["tray"])
+
+    assert result.exit_code == 0, result.output
+    assert popen.call_args.args[0] == ["colab", "--auth=oauth2", "tray", "--interval", "30"]
+    run_tray.assert_not_called()
+
+
 def test_snapshot_warns_with_the_tray_settings(snap, mock_common_state):
     from colab_cli.state import Settings
 
@@ -176,3 +234,11 @@ def test_self_check_without_pyside6_fails(mocker, mock_common_state):
 
     assert result.exit_code == 2
     assert "PySide6" in result.output
+
+
+def test_own_images_include_uvs_launcher_without_exe():
+    import ntpath
+
+    own = {ntpath.normcase(e) for e in tray_cmd._own_images(VENV_PY, None, r"C:\venv\Scripts\colab")}
+    assert ntpath.normcase(VENV_PY) in own
+    assert ntpath.normcase(r"C:\venv\Scripts\colab.exe") in own
