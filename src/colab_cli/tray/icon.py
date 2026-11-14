@@ -14,8 +14,10 @@
 
 """The Colab logo with a status dot, drawn with Qt.
 
-colab.svg: the Colab logo from homarr-labs/dashboard-icons (Apache-2.0); the
-logo is a trademark of Google.
+colab.svg: the fork's logo, made from the Colab logo of
+homarr-labs/dashboard-icons (Apache-2.0): Colab's C, and a teal ring in place
+of the orange one. The Colab logo is a trademark of Google. The Windows
+binary uses the same logo as its icon (packaging/build_binary.py).
 """
 
 from importlib.resources import files

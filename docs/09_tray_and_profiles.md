@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-14: The fork's own logo (`tray/colab.svg`): Colab's C, and a teal ring (#16A6B6, #087783) in place of the orange one, so the fork's tray and binary are told apart from Google's tools. The tray draws it with its status dot as before. The Windows binary has it as its icon: `packaging/build_binary.py` draws it with Qt on a transparent square at 16–256 px into `build/colab.ico` (PNG images in an .ico) and `colab.spec` sets `icon=`; Linux and macOS binaries have no icon of their own (a macOS icon needs an .app bundle). Live: the local Windows build shows the logo in Explorer (the 32 px icon read back from the exe: the C orange, the ring teal), `tray --self-check` ok.
 2026-11-14: No terminal window for the tray on Windows. `--detach` used `CREATE_NO_WINDOW | DETACHED_PROCESS`; Windows ignores the first next to the second, so the binary's onefile child got a console window of its own, and closing it ended the tray. Now `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`. A tray alone on its console (a shortcut, Explorer, the binary's Run key at sign-in) restarts itself that way and exits (`_owns_console`: every other process on the console is one of its launchers, which for uv's colab.exe is argv[0] without `.exe`). Live on Windows, dev install and binary: started in a console of its own, the first process exits in 2.5–4 s and the tray runs on with no window (its conhost has none; no Windows Terminal process).
 2026-11-14: The standalone binaries include the tray, on purpose and slim. Before, PySide6 got into them only because it is also a dev dependency, together with pytest and IPython; pyarrow (from jupyter-kernel-client) was more than half of the Windows binary. Built with `--no-dev --extra tray` and the exclusions in `packaging/colab.spec`, the Windows binary went from 109.7 MB to 44.3 MB (local build) with the panel inside. `colab tray --detach` from a binary failed silently: the onefile child reused the folder its parent had unpacked itself into, deleted when the parent exited; `packaging/colab_entry.py` now sets `PYINSTALLER_RESET_ENVIRONMENT=1`, so every child the binary starts unpacks itself. Hidden `colab tray --self-check` is the workflows' smoke test that Qt is inside. Live on the Windows binary: `--self-check`, `--snapshot`, the `--help` of every command, `tray --detach` keeps running.
 2026-11-13: More tray settings (`settings.json`): the low-balance warning limit (`tray_low_balance_hours`, default 1 h at the current rate, 0 turns it off), the idle-runtime warning (`tray_idle_warn_minutes`, default 75), asking before a profile starts (`tray_confirm_start`, default on) and the terminal for Log and SSH (`tray_terminal`: empty is automatic, else a command with `{cmd}`; presets: Windows Terminal on Windows, GNOME Terminal, Konsole, Xfce Terminal, kitty, Alacritty, xterm on Linux; Terminal.app stays the automatic choice on macOS). `icon_state` and `events` take the limits as parameters; `colab tray --snapshot` uses the same settings.
@@ -231,7 +232,7 @@ run it on each binary.
   global options in use carry over; the tray's lock keeps a second copy out.
 - `app.py`: a `QTimer` starts `collect_snapshot` on a `QThreadPool` worker
   (the only thread that uses the CLI state); the result arrives as a signal.
-  The icon (`icon.py`) is the Colab logo with a coloured dot; the tooltip says
+  The icon (`icon.py`) is the fork's logo with a coloured dot; the tooltip says
   the state in words (`actions.status_text`), errors and stale data included.
 - `panel.py`, after the design: header (logo, connection state, settings);
   "Active sessions" with a count; one card per runtime in a scroll area that
@@ -287,8 +288,9 @@ run it on each binary.
   operating system keeps (see `--autostart`): saving with it on writes the
   command again, so a moved install is picked up; an error is notified. The panel's texts are in `i18n.py`; the CLI
   stays English.
-- The Colab logo (`tray/colab.svg`) comes from homarr-labs/dashboard-icons
-  (Apache-2.0); the logo is a trademark of Google.
+- The fork's logo (`tray/colab.svg`, also the Windows binary's icon) is made
+  from the Colab logo of homarr-labs/dashboard-icons (Apache-2.0): Colab's C
+  and a teal ring. The Colab logo is a trademark of Google.
 
 ## Testing
 

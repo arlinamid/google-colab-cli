@@ -27,6 +27,7 @@ out (EXCLUDED_MODULES, keep_file), so tests can check them without PyInstaller.
 
 import os
 import re
+import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,11 +65,62 @@ def keep_file(dest: str) -> bool:
     return not any(re.search(p, dest) for p in _DROPPED_FILES)
 
 
+# The tray's logo is also the Windows binary's icon (Explorer, taskbar).
+ICON_SVG = os.path.join(ROOT, "src", "colab_cli", "tray", "colab.svg")
+ICON_SIZES = (16, 24, 32, 48, 64, 256)
+
+
+def ico_bytes(pngs: dict) -> bytes:
+    """An .ico file holding one PNG image per size ({size: png bytes})."""
+    sizes = sorted(pngs)
+    header = struct.pack("<HHH", 0, 1, len(sizes))
+    entries, offset = b"", 6 + 16 * len(sizes)
+    for size in sizes:
+        side = 0 if size >= 256 else size  # 0 stands for 256
+        entries += struct.pack("<BBBBHHII", side, side, 0, 0, 1, 32, len(pngs[size]), offset)
+        offset += len(pngs[size])
+    return header + entries + b"".join(pngs[s] for s in sizes)
+
+
+def write_icon(svg_path: str, out_path: str) -> None:
+    """Draw the logo centred on a transparent square at each of ICON_SIZES
+    with Qt (the build has the tray extra) and save them as one .ico."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtSvg import QSvgRenderer
+
+    with open(svg_path, "rb") as f:
+        renderer = QSvgRenderer(QByteArray(f.read()))
+    box = renderer.viewBoxF()
+    pngs = {}
+    for size in ICON_SIZES:
+        img = QImage(size, size, QImage.Format_ARGB32)
+        img.fill(Qt.transparent)
+        height = size * box.height() / box.width()
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.Antialiasing)
+        renderer.render(painter, QRectF(0, (size - height) / 2, size, height))
+        painter.end()
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        img.save(buf, "PNG")
+        pngs[size] = bytes(buf.data())
+    with open(out_path, "wb") as f:
+        f.write(ico_bytes(pngs))
+
+
 def main() -> None:
     import PyInstaller.__main__
 
     name = sys.argv[1] if len(sys.argv) > 1 else "colab"
     os.environ["COLAB_BINARY_NAME"] = name
+    if sys.platform == "win32":
+        # PyInstaller reads only .ico on Windows; the other binaries have no
+        # icon of their own (a macOS icon needs an .app bundle).
+        icon = os.path.join(ROOT, "build", "colab.ico")
+        os.makedirs(os.path.dirname(icon), exist_ok=True)
+        write_icon(ICON_SVG, icon)
+        os.environ["COLAB_BINARY_ICON"] = icon
     PyInstaller.__main__.run(
         [
             os.path.join(ROOT, "packaging", "colab.spec"),
