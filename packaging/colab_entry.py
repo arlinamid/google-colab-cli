@@ -18,7 +18,15 @@ See .github/workflows/release.yml (build-binaries). The binary also runs as
 its own ssh ProxyCommand (`colab ssh --proxy-mode ...`), see _proxy_command.
 """
 
-from colab_cli.cli import main
+import os
+
+# The binary runs itself as a child (`tray --detach`, the tray's actions,
+# `colab profile run`, the ssh ProxyCommand). A onefile child would reuse the
+# folder this process unpacked itself into, which is deleted when this process
+# exits; with this variable each child unpacks itself (PyInstaller >= 6.9).
+os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+
+from colab_cli.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

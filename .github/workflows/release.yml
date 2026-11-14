@@ -142,7 +142,7 @@ jobs:
         shell: bash
         run: |
           name="colab-${GITHUB_REF_NAME#v}-${{ matrix.label }}"
-          uv run --with pyinstaller==6.22.3 python packaging/build_binary.py "$name"
+          uv run --locked --exact --no-dev --extra tray --with pyinstaller==6.22.3 python packaging/build_binary.py "$name"
           echo "BIN_NAME=$name" >> "$GITHUB_ENV"
 
       - name: Run the binary
@@ -155,6 +155,11 @@ jobs:
           for cmd in secret hf clone forward share keepalive ssh exec run stop; do
             "$bin" "$cmd" --help > /dev/null
           done
+          # The tray's Qt is inside: load it and draw the icons offscreen.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y -qq libegl1 libxkbcommon0 libfontconfig1 > /dev/null
+          fi
+          "$bin" tray --self-check
 
       - uses: actions/upload-artifact@v6
         with:

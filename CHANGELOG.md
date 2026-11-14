@@ -30,12 +30,14 @@ The desktop release: a tray panel for the runtimes, saved run profiles, progress
 
 - **cost:** estimates and `--budget` use the runtime's own hourly rate instead of the account's, which counts every runtime: a 0.05 CU budget on a CPU next to a T4 stopped after 2.4 minutes instead of about 37. The rate is learned per accelerator while a runtime runs alone; the `cost` block says how it was found (`rate_basis`) and keeps the account rate.
 - **logging:** `colab.log` rotates at 10 MB (two old files kept); a long-running tray had grown it to 200 MB.
+- **binary:** the standalone binaries include the tray (`colab tray` works without Python) and are less than half the size: the Windows binary went from 110 MB to 44 MB. They no longer carry pyarrow, pandas, IPython or the test tools, which the CLI never loads. (#11)
 
 ### Fixed
 
 - **tray:** a job started on a new runtime showed after up to 5 minutes (the runtime was seen before its job started); new runtimes are now watched for their first 3 minutes.
 - **tray:** a runtime created after the tray started showed as an orphan; dialogs opened behind the panel; terminal windows (Log, SSH) closed when their command ended.
 - **logging:** the same line was written several times when the CLI ran more than one command in one process.
+- **tray:** on Windows the tray no longer opens a terminal window: `--detach` starts it hidden, and a tray started from a shortcut or at sign-in restarts itself without its window. From the binary, `colab tray --detach` stopped right after it started. (#11)
 
 ## [0.8.0.2] - 2026-11-12
 
