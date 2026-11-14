@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-14: The standalone binaries include the tray, on purpose and slim. Before, PySide6 got into them only because it is also a dev dependency, together with pytest and IPython; pyarrow (from jupyter-kernel-client) was more than half of the Windows binary. Built with `--no-dev --extra tray` and the exclusions in `packaging/colab.spec`, the Windows binary went from 109.7 MB to 44.3 MB (local build) with the panel inside. `colab tray --detach` from a binary failed silently: the onefile child reused the folder its parent had unpacked itself into, deleted when the parent exited; `packaging/colab_entry.py` now sets `PYINSTALLER_RESET_ENVIRONMENT=1`, so every child the binary starts unpacks itself. Hidden `colab tray --self-check` is the workflows' smoke test that Qt is inside. Live on the Windows binary: `--self-check`, `--snapshot`, the `--help` of every command, `tray --detach` keeps running.
 2026-11-13: More tray settings (`settings.json`): the low-balance warning limit (`tray_low_balance_hours`, default 1 h at the current rate, 0 turns it off), the idle-runtime warning (`tray_idle_warn_minutes`, default 75), asking before a profile starts (`tray_confirm_start`, default on) and the terminal for Log and SSH (`tray_terminal`: empty is automatic, else a command with `{cmd}`; presets: Windows Terminal on Windows, GNOME Terminal, Konsole, Xfce Terminal, kitty, Alacritty, xterm on Linux; Terminal.app stays the automatic choice on macOS). `icon_state` and `events` take the limits as parameters; `colab tray --snapshot` uses the same settings.
 2026-11-13: Start with the computer (`tray/autostart.py`, no Qt): per user and without administrator rights, a value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (run with `pythonw.exe` next to `python.exe`, so no console window opens at sign-in), a LaunchAgent with `RunAtLoad` on macOS, an XDG autostart `.desktop` entry on Linux. The operating system keeps the setting (nothing in settings.json). A checkbox in the tray's settings (saving it again rewrites the command, e.g. after the install moved) and `colab tray --autostart on|off|status`. Live on Windows: `status` read the Run key and the command that would be written uses the venv's pythonw.exe; writing the Run key was left to the user (the agent's sandbox refuses persistent startup entries).
 2026-11-13: Feedback while a profile starts. Creating a runtime takes 1–3 minutes and the panel showed nothing until it existed, so a GPU profile was clicked twice: two T4s, the first left as an orphan. Now a click is answered at once (a notification and a "Starting" card with a moving bar, the phase and the time so far: launching, getting a runtime, running the script, waiting for the service; the phase comes from the run's own lines in `tray-logs/NAME.log`, read from where this run starts). A kernel profile's runtime card says its script is still setting up, with the script's newest line. A profile cannot be started again while its run is alive (menu entry and main button disabled, a second click only notifies), and the tray refreshes every 10 s while a runtime is being created. `colab profile run` prints `Script finished on 'S'.` after a kernel script. Also: a runtime seen before its first job started (a profile's runtime is saved before its job) was looked at again only after IDLE_RECHECK_SEC (5 minutes); a new runtime is now watched on every refresh for its first NEW_RUNTIME_WATCH_SEC (3 minutes). Live (demo profile, CPU, through `TrayApp.start_profile`): the card appeared after 1 s, the second click started nothing, and the job's card showed "Running" 14 s after the click (before: idle for over 4 minutes).
@@ -194,6 +195,16 @@ adds PySide6-Essentials. Qt was chosen over pystray (a native menu cannot
 draw cards and progress bars) plus a separate window: one event loop for the
 icon, the panel and notifications (no main-thread clash on macOS), a tray
 icon on Linux without PyGObject (StatusNotifier), and native SVG.
+
+The standalone binaries include the panel. They are built with the `[tray]`
+extra and without the dev tools (`uv run --locked --exact --no-dev --extra
+tray`), and `packaging/colab.spec` leaves out what neither the CLI nor the
+panel loads: pyarrow, pandas, IPython and jedi (jupyter-kernel-client pulls
+them in to move variables between kernels), pytest, QtNetwork, Qt's
+translations and the software OpenGL renderer (`packaging/build_binary.py`:
+`EXCLUDED_MODULES`, `keep_file`). `colab tray --self-check` (hidden) loads the
+panel's Qt code and draws the icons offscreen; the release and CI workflows
+run it on each binary.
 
 - `colab tray [--interval 30] [--detach]`: refuses without a desktop (no
   `DISPLAY`/`WAYLAND_DISPLAY`, or WSL: exit 2, pointing to `--snapshot`) or

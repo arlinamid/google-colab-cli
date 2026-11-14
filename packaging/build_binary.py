@@ -14,62 +14,70 @@
 
 """Build the standalone `colab` binary for this OS with PyInstaller.
 
-Usage (from the repository root; the package must be installed, e.g. by
-`uv sync`, so its metadata and version are available):
+Usage (from the repository root). Install the package with the tray and
+without the dev tools, so neither pytest nor IPython gets into the binary:
 
-    uv run --with pyinstaller python packaging/build_binary.py [NAME]
+    uv run --locked --exact --no-dev --extra tray --with pyinstaller \\
+        python packaging/build_binary.py [NAME]
 
 Writes dist/bin/NAME (dist/bin/NAME.exe on Windows); NAME defaults to colab.
+packaging/colab.spec holds the build; this module also holds what it leaves
+out (EXCLUDED_MODULES, keep_file), so tests can check them without PyInstaller.
 """
 
 import os
+import re
 import sys
-
-import PyInstaller.__main__
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Packages the CLI never imports in the binary. jupyter-kernel-client pulls in
+# jupyter-mimetypes, which imports pyarrow, pandas and IPython only to move
+# variables between kernels (the CLI does not); pyarrow alone was more than
+# half of the binary. pytest and jedi come from the dev tools.
+EXCLUDED_MODULES = [
+    "pyarrow",
+    "pandas",
+    "numpy",
+    "IPython",
+    "jedi",
+    "parso",
+    "pytest",
+    "_pytest",
+    "PySide6.QtNetwork",
+]
+
+# Qt files the tray does not need: the software OpenGL renderer (20 MB; the
+# tray draws with QPainter), Qt's own translations (the tray has its own
+# strings), and the network module with its TLS plugins.
+_DROPPED_FILES = [
+    r"(^|/)opengl32sw\.dll$",
+    r"^PySide6/translations/",
+    r"(^|/)(lib)?Qt6?Network",
+    r"^PySide6/plugins/tls/",
+]
+
+
+def keep_file(dest: str) -> bool:
+    """False for a collected file (path inside the binary) left out of it."""
+    dest = dest.replace("\\", "/")
+    return not any(re.search(p, dest) for p in _DROPPED_FILES)
+
 
 def main() -> None:
+    import PyInstaller.__main__
+
     name = sys.argv[1] if len(sys.argv) > 1 else "colab"
-
-    def data(src: str, dest: str) -> str:
-        return f"{os.path.join(ROOT, src)}{os.pathsep}{dest}"
-
+    os.environ["COLAB_BINARY_NAME"] = name
     PyInstaller.__main__.run(
         [
-            os.path.join(ROOT, "packaging", "colab_entry.py"),
-            "--onefile",
-            "--name",
-            name,
+            os.path.join(ROOT, "packaging", "colab.spec"),
             "--distpath",
             os.path.join(ROOT, "dist", "bin"),
             "--workpath",
             os.path.join(ROOT, "build", "pyinstaller"),
-            "--specpath",
-            os.path.join(ROOT, "build", "pyinstaller"),
             "--noconfirm",
             "--clean",
-            # Package data: OAuth client config; README and SKILL are mapped
-            # into the package only when the wheel is built (pyproject.toml).
-            "--collect-data",
-            "colab_cli",
-            "--add-data",
-            data("README.md", "colab_cli"),
-            "--add-data",
-            data(os.path.join("skills", "colab-operator", "SKILL.md"), "colab_cli"),
-            # nbformat validates notebooks against bundled JSON schemas.
-            "--collect-data",
-            "nbformat",
-            # `colab version` and the update check read the package metadata.
-            "--copy-metadata",
-            "google-colab-cli",
-            # The OAuth token is kept with keyring, whose backends are
-            # discovered at run time.
-            "--collect-submodules",
-            "keyring.backends",
-            "--copy-metadata",
-            "keyring",
         ]
     )
 

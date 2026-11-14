@@ -69,6 +69,32 @@ def _load_gui():
     return run_tray
 
 
+def _self_check() -> int:
+    """Load the panel's Qt code and draw the icons offscreen (the binary's smoke test)."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        _load_gui()
+        from PySide6 import __version__ as qt_version
+        from PySide6.QtWidgets import QApplication
+
+        from colab_cli.tray import glyphs, icon
+    except ImportError as e:
+        typer.echo(f"[colab] tray self-check failed: {e}", err=True)
+        return 2
+    _app = QApplication.instance() or QApplication(["colab"])
+    drawn = {
+        "logo": not icon.logo_pixmap(32).isNull(),
+        "status icon": not icon.status_icon("#34a853").isNull(),
+        "glyph": not glyphs.pixmap("settings", "#202124").isNull(),
+    }
+    failed = [k for k, ok in drawn.items() if not ok]
+    if failed:
+        typer.echo(f"[colab] tray self-check failed: could not draw the {', '.join(failed)}.", err=True)
+        return 1
+    typer.echo(f"[colab] tray self-check ok (PySide6 {qt_version}, {_app.platformName()}).")
+    return 0
+
+
 def _warn_limits(state) -> dict:
     """The tray's warning limits from settings.json (the defaults if unreadable)."""
     try:
@@ -145,6 +171,9 @@ def tray(
             help="Start the tray when you sign in (Windows, macOS, Linux), stop doing so, or show the setting; then exit.",
         ),
     ] = "",
+    self_check: Annotated[
+        bool, typer.Option("--self-check", hidden=True, help="Check that the tray's Qt code loads and draws, then exit.")
+    ] = False,
 ):
     """Show the active runtimes in a tray icon and panel.
 
@@ -156,6 +185,8 @@ def tray(
     """
     from colab_cli.common import state
 
+    if self_check:
+        raise typer.Exit(_self_check())
     if autostart:
         raise typer.Exit(_autostart(autostart))
     if snapshot:

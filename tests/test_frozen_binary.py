@@ -67,3 +67,22 @@ def test_install_flag_refuses_for_a_binary(frozen, mocker):
     assert result.exit_code == 1
     run.assert_not_called()
     assert "binary" in result.output
+
+
+def test_the_binary_starts_its_children_as_fresh_binaries(monkeypatch):
+    """A onefile child must unpack itself: `tray --detach` outlives its parent.
+
+    Without PYINSTALLER_RESET_ENVIRONMENT the child reuses the parent's
+    unpacked folder, which is deleted when the parent exits.
+    """
+    import importlib.util
+    import os
+
+    monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "colab_entry", os.path.join(root, "packaging", "colab_entry.py")
+    )
+    spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+    assert os.environ["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

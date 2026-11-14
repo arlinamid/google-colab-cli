@@ -157,3 +157,22 @@ def test_snapshot_warns_with_the_tray_settings(snap, mock_common_state):
 
     assert rec["icon"]["level"] == "warning"  # about 46 hours left, under 100
     assert "low balance" in runner.invoke(app, ["tray", "--snapshot"]).output
+
+
+def test_self_check_renders_the_icons_offscreen(mock_common_state):
+    """`colab tray --self-check`: the binary's smoke test that Qt is inside."""
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+
+    result = runner.invoke(app, ["tray", "--self-check"])
+
+    assert result.exit_code == 0, result.output
+    assert "tray self-check ok" in result.output
+
+
+def test_self_check_without_pyside6_fails(mocker, mock_common_state):
+    mocker.patch.object(tray_cmd, "_load_gui", side_effect=ImportError("No module named 'PySide6'"))
+
+    result = runner.invoke(app, ["tray", "--self-check"])
+
+    assert result.exit_code == 2
+    assert "PySide6" in result.output
