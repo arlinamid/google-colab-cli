@@ -494,3 +494,45 @@ def test_more_settings_are_saved_and_used(tray, tmp_path, mocker):
     tray.start_profile("train")
     confirm.assert_not_called()
     assert tray.popen.call_args.args[0] == ["colab", "profile", "run", "train"]
+
+
+def test_about_is_in_the_tray_menu_before_quit(tray):
+    assert [a.text() for a in tray.menu.actions()] == [
+        "Frissítés most", "Beállítások", "Névjegy", "Kilépés"]
+
+
+def test_about_shows_the_version_the_repositories_and_the_license(tray, mocker):
+    from PySide6.QtWidgets import QDialog
+
+    mocker.patch.object(tray_app, "get_app_version", return_value="9.8.7.dev1+gabc")
+    seen = {}
+
+    def show(dialog):
+        seen["title"] = dialog.windowTitle()
+        seen["text"] = "\n".join(w.text() for w in dialog.findChildren(QLabel))
+        seen["links"] = all(w.openExternalLinks() for w in dialog.findChildren(QLabel) if "href" in w.text())
+        seen["logo"] = any(not w.pixmap().isNull() for w in dialog.findChildren(QLabel))
+        seen["buttons"] = [b.text() for b in dialog.findChildren(QPushButton)]
+        return QDialog.Accepted
+
+    mocker.patch.object(QDialog, "exec", show)
+    tray.open_about()
+
+    assert seen["title"] == "A Colab CLI névjegye"
+    assert "9.8.7.dev1+gabc" in seen["text"]
+    assert "https://github.com/arlinamid/google-colab-cli" in seen["text"]
+    assert "https://github.com/googlecolab/google-colab-cli" in seen["text"]
+    assert "Apache" in seen["text"]
+    assert seen["links"] and seen["logo"]
+    assert seen["buttons"] == ["Bezárás"]
+
+
+def test_clicking_the_panel_logo_opens_about(tray, mocker):
+    opened = mocker.patch.object(tray, "open_about")
+    tray.panel.about_clicked.disconnect()
+    tray.panel.about_clicked.connect(tray.open_about)
+
+    tray.panel.logo_button.click()
+
+    opened.assert_called_once()
+    assert tray.panel.logo_button.toolTip() == "Névjegy"

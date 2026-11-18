@@ -19,7 +19,7 @@ clicked; app.py does the work."""
 from typing import Any, Dict, List
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -79,6 +79,7 @@ QPushButton#row { color: #e8eaed; background: transparent; border: none; text-al
 QPushButton#row:hover, QPushButton#flat:hover, QToolButton#gear:hover { background: #2b2c2f; border-radius: 6px; }
 QPushButton#flat { color: #bdc1c6; background: transparent; border: none; padding: 4px 6px; }
 QToolButton#gear { color: #e8eaed; background: transparent; border: none; font-size: 18px; padding: 4px; }
+QToolButton#logo { background: transparent; border: none; padding: 0; }
 QScrollArea { background: transparent; border: none; }
 QScrollBar:vertical { background: transparent; width: 8px; margin: 2px 0 2px 2px; }
 QScrollBar::handle:vertical { background: #5f6368; border-radius: 3px; min-height: 24px; }
@@ -138,6 +139,7 @@ class Panel(QWidget):
     refresh_clicked = Signal()
     settings_clicked = Signal()
     edit_profiles_clicked = Signal()
+    about_clicked = Signal()
     quit_clicked = Signal()
 
     def __init__(self):
@@ -163,9 +165,13 @@ class Panel(QWidget):
 
     def _build_static(self):
         head = QHBoxLayout()
-        logo = QLabel()
-        logo.setPixmap(logo_pixmap(30))
-        head.addWidget(logo)
+        logo = logo_pixmap(30)
+        self.logo_button = QToolButton(objectName="logo")
+        self.logo_button.setIcon(QIcon(logo))
+        self.logo_button.setIconSize(logo.size() / logo.devicePixelRatio())
+        self.logo_button.setCursor(Qt.PointingHandCursor)
+        self.logo_button.clicked.connect(self.about_clicked)
+        head.addWidget(self.logo_button)
         titles = QVBoxLayout()
         titles.setSpacing(0)
         titles.addWidget(_label("Colab CLI", "title"))
