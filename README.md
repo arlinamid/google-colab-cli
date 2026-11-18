@@ -29,7 +29,7 @@ Google's CLI provisions runtimes and runs code on them from Linux and macOS. Thi
 
 Commands only in this fork: `colab tray`, `colab profile`, `colab job`, `colab inspect`, `colab history`, `colab secret`, `colab forward`, `colab share`, `colab keepalive`, `colab hf`, `colab clone`. Design notes: [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md) (tray, profiles, progress), [docs/08_agent_feedback.md](docs/08_agent_feedback.md) (JSON results, jobs, inspect, cost, history).
 
-Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes, so Google's next release (0.8.1) still sorts above it. Google's changes are merged in when they are released. See [CHANGELOG.md](CHANGELOG.md).
+Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes, so Google's next release (0.8.1) still sorts above it. Google's changes are merged in when they are released, and sometimes before: 0.8.0.4 already has Google's commits up to 17 November 2026. See [CHANGELOG.md](CHANGELOG.md).
 
 > [!NOTE]
 > **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.
@@ -110,6 +110,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab status [-s NAME]` | Display hardware, machine shape, status, and local metadata for active sessions |
 | `colab restart-kernel [-s NAME]` | Restart the active session's Jupyter kernel |
 | `colab stop [-s NAME]` | Terminate a session VM and release its resources |
+| `colab stop --all` | Stop every local session the server still has |
 | `colab stop --orphans [--yes]` | List server-side runtimes with no local session (`[?]` in `colab sessions`) and stop them after confirmation |
 | `colab url [-s NAME] [--open]` | Print or open a browser URL connecting to the active session |
 
@@ -123,7 +124,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab job start [-s NAME] [--name N] [--env K=V] [--secret SPEC] [--budget CU] [--json] (-f SCRIPT [-- ARGS] \| -- CMD)` | Start a long job in the background on the runtime and return at once; `-f` also takes a notebook (`.ipynb`, its cells run in order in IPython); Python jobs report metrics, and `report(epoch=, epochs=)` the overall progress, with `colab_feedback.report()`; `--budget` stops the job once it has used about that many compute units |
 | `colab job status\|tail\|wait\|stop\|list [-s NAME] [ID] [--json]` | Follow a job: state, tqdm progress, overall progress, epoch or notebook cell, metrics trend, last output, stall flag and a diagnosis of failures; `wait` keeps the runtime alive and exits with the job's code |
 | `colab profile list\|show\|add\|edit\|rm\|path\|run` | Saved run setups in `profiles.toml`: `run NAME` starts a script or notebook as a background job (new runtime, or its fixed session), or runs a server in the kernel (`vars`), forwards its ports and opens its URL when ready |
-| `colab tray [--interval S] [--detach] [--snapshot [--json]] [--autostart on\|off\|status]` | Tray icon and panel (needs the `[tray]` extra): runtimes with progress, ETA and main metric, Log/SSH/Stop, compute units left (estimated), start profiles, notifications; it never keeps a runtime alive. `--snapshot` prints the same without a GUI; `--autostart` starts the tray when you sign in (Windows, macOS, Linux) |
+| `colab tray [--interval S] [--detach] [--snapshot [--json]] [--autostart on\|off\|status]` | Tray icon and panel (needs the `[tray]` extra): runtimes with progress, ETA and main metric, Log/SSH/Stop, compute units left (estimated), start profiles, notifications, an About window (version, links); it never keeps a runtime alive. `--snapshot` prints the same without a GUI; `--autostart` starts the tray when you sign in (Windows, macOS, Linux) |
 | `colab inspect [-s NAME] [--vars] [--gpu] [--disk] [--packages] [--files PATH] [--json]` | Show the kernel's variables (types and shapes, never values), GPU, disk, memory and packages installed since the first inspect; a busy kernel is not queued behind |
 | `colab history errors\|stats [-s NAME] [--since 7d] [--json]` | Learn from earlier runs: recurring failures and what fixed them last time; runs, success rate, usual duration and cost per file (local history only) |
 | `colab forward [-s NAME] PORT...` | Forward local ports to the runtime over ssh (private; keeps the runtime alive until Ctrl+C) |
@@ -180,6 +181,7 @@ The Colab backend only counts kernel activity as use, so `colab forward`, `colab
 * `-c, --client-oauth-config PATH` — Path to public OAuth client credentials configuration (default: `~/.colab-cli-oauth-config.json`).
 * `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`).
 * `--logtostderr` — Direct debug logging output to stderr.
+* `--public-api / --no-public-api` — List runtimes through Google's new Colab Public API (`colaboratory.googleapis.com`) instead of the tunnel API (default: off; also `COLAB_CLI_PUBLIC_API=1` or `use_public_api` in `settings.json`). Google's API currently refuses this CLI's sign-in; `colab test-public-api` checks which API your credentials can reach.
 
 ---
 

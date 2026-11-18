@@ -123,7 +123,7 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - **One-shot overview**: `colab tray --snapshot --json` gives every runtime with its newest job (state, `overall_percent`, epoch/cell, main metric, last-output age, diagnosis), the account balance, rate and estimated hours left, and an `icon.level` (`none`/`idle`/`running`/`warning`/`error`/`stale`). It reads job files only and never keeps a runtime alive. The GUI (`colab tray`) is for people.
 
 ## Safety
-- **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.
+- **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors. `colab stop --all` stops every local session at once; `colab stop --orphans` lists server runtimes with no local session and stops them after asking (they may be the user's own runtimes from the web UI, so check first).
 - Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
 - **Isolate parallel/agent runs** with the global `--config <path>` flag to point session state at a scratch file (e.g. `colab --config /tmp/agent.json new -s job`).
 
