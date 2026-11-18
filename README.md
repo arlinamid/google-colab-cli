@@ -172,7 +172,11 @@ colab share -s s1 7860 --via ngrok           # needs NGROK_AUTHTOKEN
 The Colab backend only counts kernel activity as use, so `colab forward`, `colab ssh -L` and `colab share` keep the runtime alive while they run. See [docs/07_secrets_tunnels_integrations.md](docs/07_secrets_tunnels_integrations.md).
 
 ### Global Options
-* `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `adc`).
+* `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `oauth2`). To authenticate with Application Default Credentials (`--auth adc`), run:
+  ```bash
+  gcloud auth application-default login \
+      --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
+  ```
 * `-c, --client-oauth-config PATH` — Path to public OAuth client credentials configuration (default: `~/.colab-cli-oauth-config.json`).
 * `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`).
 * `--logtostderr` — Direct debug logging output to stderr.

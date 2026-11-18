@@ -394,9 +394,7 @@ def run_command(
         read_script(script)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
-    variant, accelerator, shape = resolve_runtime_options(
-        gpu, tpu, high_mem=high_mem
-    )
+    variant, accelerator, shape = resolve_runtime_options(gpu, tpu, high_mem=high_mem)
 
     if high_mem and accelerator in HIGH_MEM_ONLY_ACCELERATORS:
         typer.echo(
