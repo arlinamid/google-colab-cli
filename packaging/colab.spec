@@ -54,4 +54,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # The tray's logo as an .ico, made by build_binary.py on Windows.
+    icon=os.environ.get("COLAB_BINARY_ICON") or None,
 )

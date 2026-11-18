@@ -254,6 +254,16 @@ def test_status_icon_draws(qapp):
     assert pix.height() == 30 and pix.width() > 40
 
 
+def test_status_dot_is_in_the_bottom_right_corner(qapp):
+    from PySide6.QtGui import QColor
+
+    from colab_cli.tray.icon import status_icon
+
+    img = status_icon("#34a853", size=64).pixmap(64, 64).toImage()
+    assert img.pixelColor(52, 52) == QColor("#34a853")   # the dot
+    assert img.pixelColor(58, 5).alpha() == 0           # nothing above the logo
+
+
 def test_dialogs_open_on_top_of_the_panel_without_its_style(tray, mocker):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QDialog

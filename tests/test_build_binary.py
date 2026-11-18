@@ -106,3 +106,54 @@ def test_the_binary_smoke_test_checks_the_tray(workflow):
     with open(os.path.join(ROOT, ".github", "workflows", workflow), encoding="utf-8") as f:
         text = f.read()
     assert 'tray --self-check' in text
+
+
+def _ico_entries(data: bytes):
+    """(width, payload) for each image of an .ico file."""
+    import struct
+
+    reserved, kind, count = struct.unpack_from("<HHH", data, 0)
+    assert (reserved, kind) == (0, 1)
+    entries = []
+    for i in range(count):
+        w, h, _colors, _res, planes, bpp, size, offset = struct.unpack_from("<BBBBHHII", data, 6 + 16 * i)
+        assert w == h and planes == 1 and bpp == 32
+        entries.append((w or 256, data[offset:offset + size]))
+    return entries
+
+
+def test_ico_bytes_holds_each_png_with_its_size():
+    pngs = {16: b"\x89PNG-16", 256: b"\x89PNG-256-longer"}
+
+    entries = _ico_entries(build_binary.ico_bytes(pngs))
+
+    assert entries == [(16, b"\x89PNG-16"), (256, b"\x89PNG-256-longer")]
+
+
+def test_write_icon_draws_the_tray_logo_at_every_size(tmp_path):
+    pytest.importorskip("PySide6.QtSvg", exc_type=ImportError)
+    from PySide6.QtGui import QImage
+
+    out = tmp_path / "colab.ico"
+    build_binary.write_icon(build_binary.ICON_SVG, str(out))
+
+    entries = _ico_entries(out.read_bytes())
+    assert [w for w, _ in entries] == list(build_binary.ICON_SIZES)
+    for w, png in entries:
+        img = QImage.fromData(png, "PNG")
+        assert (img.width(), img.height()) == (w, w)
+    big = QImage.fromData(entries[-1][1], "PNG")
+    assert big.pixelColor(2, 2).alpha() == 0            # transparent corner
+    assert big.pixelColor(244, 128).alpha() == 255      # the ring on the right
+
+
+def test_the_logo_is_the_forks():
+    """The fork's logo: Colab's C, and a teal ring instead of the orange one."""
+    with open(build_binary.ICON_SVG, encoding="utf-8") as f:
+        svg = f.read()
+    assert "#16A6B6" in svg and "#087783" in svg
+
+
+def test_the_spec_sets_the_icon():
+    with open(os.path.join(ROOT, "packaging", "colab.spec"), encoding="utf-8") as f:
+        assert "COLAB_BINARY_ICON" in f.read()
