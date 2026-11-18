@@ -42,15 +42,14 @@ jobs:
       fail-fast: false
       matrix:
         # Push: Linux and Windows on 3.12. Pull request and manual runs: all
-        # three OSes. macos-latest (macOS 26 arm64) jobs often wait for a long
-        # time or are cancelled ("not acquired by Runner"): GitHub reports
-        # capacity constraints for macOS arm64 runners. macos-15-intel is a
-        # pinned GA x64 image outside that pool; the code is pure Python.
-        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macos-15-intel", "windows-latest"]') }}
+        # three OSes. macOS runs on macos-latest (arm64): in November 2026
+        # macos-15-intel jobs were "not acquired by Runner" for 15 minutes
+        # twice in a row, so the Intel image is no longer the safer pool.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
         python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.13"]') }}
         exclude:
           # One Python version is enough on macOS; it saves a scarce runner.
-          - os: macos-15-intel
+          - os: macos-latest
             python: "3.13"
     steps:
       - uses: actions/checkout@v5
@@ -139,7 +138,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
         with:

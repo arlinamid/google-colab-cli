@@ -24,6 +24,8 @@ Google's changes since 0.8.0 merged in (up to 17 November 2026, before Google's 
 
 - **tray, binary:** the fork's own logo (Colab's C with a teal ring) in the tray and the panel, and as the Windows binary's icon; the tray's status dot sits in the bottom-right corner. (#12)
 
+- **binary:** the macOS binary is built for Apple silicon (`colab-<version>-macos-arm64`) instead of Intel (`macos-x64`): GitHub's Intel macOS runners were not available. On an Intel Mac, install with uv or pip. (#12)
+
 ### Fixed
 
 - **auth:** signing in no longer fails when you approve only some of the requested permissions; the CLI keeps the permissions you granted (upstream #235). (#12)
