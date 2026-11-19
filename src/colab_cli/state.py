@@ -76,6 +76,9 @@ class Settings(BaseModel):
     # Hourly compute-unit rate per accelerator ("NONE", "T4", ...), learned
     # whenever a runtime was the only one (cost.py), for per-runtime budgets.
     cost_rates: Dict[str, float] = {}
+    use_public_api: bool = False
+    public_api_supported: Optional[bool] = None
+    tunnel_api_supported: Optional[bool] = None
 
 
 _OWNER_ONLY_MODE = 0o600

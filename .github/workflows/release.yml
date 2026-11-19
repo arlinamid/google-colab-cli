@@ -97,10 +97,10 @@ jobs:
             label: linux-x64
           - os: windows-latest
             label: windows-x64
-          # Intel macOS: macOS arm64 runners are often unavailable; the x64
-          # binary also runs on Apple silicon through Rosetta 2.
-          - os: macos-15-intel
-            label: macos-x64
+          # Apple silicon (arm64). Intel runners (macos-15-intel) were not
+          # available either in November 2026; Intel Macs use the pip/uv install.
+          - os: macos-latest
+            label: macos-arm64
     steps:
       - uses: actions/checkout@v5
         with:

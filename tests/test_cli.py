@@ -15,7 +15,7 @@
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import click
 import pytest
@@ -352,6 +352,35 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
 
     mock_client.unassign.assert_called_with("e1")
     mock_store.remove.assert_called_with("s1")
+
+
+def test_cli_stop_all(mock_client, mock_store, mock_common_state):
+    sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
+    mock_common_state.sync_sessions.return_value = (sessions, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "Stopped 2 session(s)" in result.output
+    assert mock_client.unassign.call_args_list == [call("e1"), call("e2")]
+    assert mock_store.remove.call_args_list == [call("s1"), call("s2")]
+
+
+def test_cli_stop_all_no_sessions(mock_common_state):
+    mock_common_state.sync_sessions.return_value = ({}, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "No active sessions" in result.output
+
+
+@pytest.mark.parametrize(
+    "extra", [["--orphans"], ["-s", "s1"]], ids=["with-orphans", "with-session"]
+)
+def test_cli_stop_all_refuses_other_targets(mock_client, mock_common_state, extra):
+    result = runner.invoke(app, ["stop", "--all", *extra])
+    assert result.exit_code == 2
+    assert "--all alone" in result.output
+    mock_client.unassign.assert_not_called()
 
 
 def test_cli_sessions_prune(mock_common_state):
@@ -944,3 +973,35 @@ def test_cli_ls_undoes_git_bash_path_conversion(
 
     assert result.exit_code == 0, result.output
     mock_contents_class.return_value.list_dir.assert_called_once_with("/content")
+
+
+@pytest.mark.parametrize(
+    "args,env,expected",
+    [
+        (["sessions"], {}, False),
+        (["--public-api", "sessions"], {}, True),
+        (["--no-public-api", "sessions"], {}, False),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+    ],
+)
+def test_cli_public_api_flag_and_env(args, env, expected):
+    from colab_cli import cli
+
+    result = runner.invoke(app, args, env=env)
+    assert result.exit_code == 0
+    assert cli.state.use_public_api is expected
+
+
+def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
+    help_res = runner.invoke(app, ["--help"])
+    assert "test-public-api" not in help_res.output
+
+    sub_help = runner.invoke(app, ["test-public-api", "--help"])
+    assert sub_help.exit_code == 0
+
+    mock_common_state.client.check_api_access.return_value = (False, True)
+    res = runner.invoke(app, ["test-public-api"])
+    assert res.exit_code == 0
+    assert "Public API" in res.output
+    assert "Tunnel API" in res.output

@@ -402,6 +402,23 @@ def _stop_orphans(yes: bool) -> None:
         raise typer.Exit(code=1)
 
 
+def _stopOne(name: str, s: SessionState) -> None:
+    """Terminate a single session (kernel, backend, local store)."""
+    from colab_cli.common import state
+
+    typer.echo(f"[colab] Stopping session '{name}'...")
+    try:
+        runtime = ColabRuntime(
+            s.url, s.token, kernel_id=s.kernel_id, session_name=s.name
+        )
+        runtime.stop(shutdown_kernel=True)
+    except Exception:
+        pass
+    state.client.unassign(s.endpoint)
+    state.store.remove(name)
+    state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
+
+
 def stop(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -419,9 +436,28 @@ def stop(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="With --orphans: do not ask.")
     ] = False,
+    allSessions: Annotated[
+        bool, typer.Option("--all", help="Stop all active sessions")
+    ] = False,
 ):
-    """Stop a session, or with --orphans the runtimes no local session knows"""
+    """Stop a session, all sessions with --all, or with --orphans the runtimes no local session knows"""
     from colab_cli.common import state
+
+    if allSessions and (session or orphans):
+        typer.echo(
+            "[colab] Use --all alone, not with -s NAME or --orphans.", err=True
+        )
+        raise typer.Exit(code=2)
+
+    if allSessions:
+        sessions, _ = state.sync_sessions()
+        if not sessions:
+            typer.echo("[colab] No active sessions.")
+            return
+        for name, s in sessions.items():
+            _stopOne(name, s)
+        typer.echo(f"[colab] Stopped {len(sessions)} session(s).")
+        return
 
     if orphans:
         if session:
@@ -435,19 +471,7 @@ def stop(
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return
-
-    typer.echo(f"[colab] Stopping session '{name}'...")
-    try:
-        runtime = ColabRuntime(
-            s.url, s.token, kernel_id=s.kernel_id, session_name=s.name
-        )
-        runtime.stop(shutdown_kernel=True)
-    except Exception:
-        pass
-
-    state.client.unassign(s.endpoint)
-    state.store.remove(name)
-    state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
+    _stopOne(name, s)
     typer.echo("[colab] Session terminated.")
 
 

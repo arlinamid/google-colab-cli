@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-18: Merged upstream `colab stop --all` (#256) next to this fork's `--orphans`: `--all` stops every local session the server still knows (`sync_sessions`), `--orphans` the server runtimes with no local session; `--all` with `-s` or `--orphans` exits 2. `_stopOne` keeps passing `session_name` to `ColabRuntime`.
+2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-13: The session and settings stores create their directory before the lock: filelock opens the lock file in its constructor, so on a fresh machine (no `~/.config/colab-cli` yet, which the debug log used to create first) `settings.json.lock` failed with FileNotFoundError.
 2026-11-13: `setup_logging` replaces the handlers it added earlier in the same process instead of adding more (in the test run every line was written once per earlier command). Unit tests no longer write the user's `colab.log`: conftest's `isolate_colab_log` patches `cli.setup_logging`; tests of logging call `common.setup_logging` with a redirected home.
 2026-11-13: `colab.log` rotates at 10 MB (`common.LOG_MAX_BYTES`, two old files kept as `colab.log.1` and `.2`). A long-running `colab tray` had grown it to 200 MB. When Windows refuses the rename (another colab process has the file open), the rollover is skipped and logging goes on.
@@ -9,6 +11,7 @@ log:
 2026-10-29: Removed the `colab console` subcommand; the long-lived connections that skip mid-session token refresh are now `repl` and `ssh`.
 2026-10-29: The debug log (`colab.log` and `--logtostderr`) masks access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies, including in percent-encoded URLs; `jupyter_kernel_client` logs at INFO so kernel stdin replies are not recorded.
 2026-10-29: `sessions.json`, `settings.json`, `colab.log` and session history files are created with mode 0600, and existing copies are tightened to 0600 the next time the CLI uses them (history files whenever the history logger starts).
+2026-10-22: Added global `--public-api/--no-public-api` toggle (`COLAB_CLI_PUBLIC_API`, `Settings.use_public_api`, default `False`), dual `Client.list_assignments()` dispatch (`/v1beta/runtimes` vs `/tun/m/assignments`), `Operation`/`Status` models, and cached auth capability hints on HTTP 401/403.
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
@@ -119,6 +122,8 @@ end to end; mocked timeouts alone do not establish backend compatibility.
     - `authuser`: 0.
     - `<endpoint>`: The unique session identifier returned during assignment (e.g., `tpu-v5e1-s-kkb-...`).
 - **Cleanup**: Remove the session from the local state file upon successful 204 response.
+- **`--all`**: Stops every local session that is still assigned on the server (`state.sync_sessions()`), one by one, then prints `Stopped N session(s).` It cannot be combined with `-s` or `--orphans` (exit 2).
+- **`--orphans [--yes]`**: Lists server-side runtimes with no local session and unassigns them after confirmation.
 
 ### 4. Session Listing (`colab sessions`)
 - **API**: `GET https://colab.research.google.com/tun/m/assignments` (based on `colab-agent` implementation).
@@ -135,8 +140,9 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
 - **VM Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM (distinct from account-level CU info, which is available via `colab usage`).
 
 ## Implementation Details
-- **Authentication**: Uses `google-auth-oauthlib` to perform a local server OAuth flow.
+- **Authentication**: Uses `google-auth-oauthlib` (`InstalledAppFlow` remote copy-paste flow, default `--auth oauth2`) or Application Default Credentials (`--auth adc`).
 - **Global Flags**:
+    - `--auth`: Authentication strategy (`oauth2` or `adc`, default: `oauth2`). User ADC credentials require `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
 - **Token Storage**: Credentials are persisted to the OS native keyring via the `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`) after the initial flow. If the keyring is inaccessible or locked, `_run_remote_flow` is invoked for the current run and a warning is printed to stderr. A legacy `~/.config/colab-cli/token.json` is migrated into the keyring on first use and deleted after a successful keyring write, or immediately if the keyring already holds a token.

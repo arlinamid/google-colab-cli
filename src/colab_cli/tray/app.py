@@ -46,11 +46,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from colab_cli.auto_update import get_app_version
 from colab_cli.common import colab_argv
 from colab_cli.profiles import ProfileError, load_profiles, profile_summary, profiles_path
 from colab_cli.tray import actions
 from colab_cli.tray.i18n import fmt_age, pick_language, t
-from colab_cli.tray.icon import status_icon
+from colab_cli.tray.icon import logo_pixmap, status_icon
 from colab_cli.tray.panel import Panel
 from colab_cli.tray_model import (
     card_model,
@@ -64,6 +65,11 @@ from colab_cli.tray_model import (
 )
 
 
+ABOUT_LINKS = (
+    ("about.fork", "https://github.com/arlinamid/google-colab-cli"),
+    ("about.releases", "https://github.com/arlinamid/google-colab-cli/releases"),
+    ("about.upstream", "https://github.com/googlecolab/google-colab-cli"),
+)
 START_REFRESH_MS = 10_000  # refresh this often while a profile's runtime is being created
 _RUN_LOG_PART = 64 * 1024
 
@@ -119,7 +125,8 @@ class TrayApp(QObject):
         self.tray = QSystemTrayIcon(status_icon("#9aa0a6"))
         self.tray.activated.connect(self._activated)
         menu = QMenu()
-        for key, slot in (("refresh_now", self.refresh), ("settings", self.open_settings), ("quit", self.quit)):
+        for key, slot in (("refresh_now", self.refresh), ("settings", self.open_settings),
+                          ("about", self.open_about), ("quit", self.quit)):
             action = QAction(t(self.lang, key), menu)
             action.triggered.connect(slot)
             menu.addAction(action)
@@ -136,6 +143,8 @@ class TrayApp(QObject):
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
         self.panel.edit_profiles_clicked.connect(self.open_profiles)
+        self.panel.about_clicked.connect(self.open_about)
+        self.panel.logo_button.setToolTip(t(self.lang, "about"))
         self.windows = []  # open log / editor windows (kept alive here)
         self.panel.quit_clicked.connect(self.quit)
 
@@ -256,6 +265,7 @@ class TrayApp(QObject):
         view = self.view()
         self.tray.setIcon(status_icon(view["icon"]["color"]))
         self.tray.setToolTip(view["tooltip"][:2000])
+        self.panel.logo_button.setToolTip(t(self.lang, "about"))
         if self.panel.isVisible():
             self.panel.render(view)
 
@@ -533,6 +543,38 @@ class TrayApp(QObject):
         self.timer.setInterval(int(self.interval * 1000))
         self.lang = pick_language(self.settings.tray_language, QLocale.system().name())
         self.redraw()
+
+    def open_about(self):
+        """The About window: logo, edition, version, repositories, license."""
+        dialog = QDialog(objectName="about")
+        dialog.setWindowTitle(t(self.lang, "about.title"))
+        box = QVBoxLayout(dialog)
+        box.setContentsMargins(24, 20, 24, 16)
+        box.setSpacing(8)
+        logo = QLabel(alignment=Qt.AlignCenter)
+        logo.setPixmap(logo_pixmap(64))
+        box.addWidget(logo)
+        title = QLabel(f"<b style='font-size:16px'>Colab CLI</b><br>{t(self.lang, 'about.edition')}",
+                       alignment=Qt.AlignCenter)
+        box.addWidget(title)
+        version = QLabel(t(self.lang, "about.version", version=get_app_version()), objectName="about_version",
+                         alignment=Qt.AlignCenter)
+        version.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.addWidget(version)
+        text = QLabel(t(self.lang, "about.text"), wordWrap=True)
+        text.setMinimumWidth(340)
+        box.addWidget(text)
+        links = QLabel("<br>".join(f"{t(self.lang, key)}: <a href='{url}'>{url}</a>" for key, url in ABOUT_LINKS),
+                       objectName="about_links")
+        links.setOpenExternalLinks(True)
+        links.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        box.addWidget(links)
+        box.addWidget(QLabel(t(self.lang, "about.license")))
+        buttons = QDialogButtonBox()
+        buttons.addButton(QPushButton(t(self.lang, "close")), QDialogButtonBox.AcceptRole)
+        buttons.accepted.connect(dialog.accept)
+        box.addWidget(buttons)
+        self.run_dialog(dialog)
 
     def quit(self):
         self.tray.hide()

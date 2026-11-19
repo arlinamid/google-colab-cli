@@ -10,6 +10,28 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0.4] - 2026-11-18
+
+Google's changes since 0.8.0 merged in (up to 17 November 2026, before Google's next release), next to everything this fork adds; the fork's own logo; an About window in the tray. Still based on Google's Colab CLI 0.8.0.
+
+### Added
+
+- **stop:** `colab stop --all` stops every local session the server still has (upstream #256). It sits next to this fork's `--orphans`, which stops the server's runtimes that have no local session; the two cannot be combined with each other or with `-s` (exit 2). (#12)
+- **api:** `--public-api` (or `COLAB_CLI_PUBLIC_API=1`, or `use_public_api` in `settings.json`) lists runtimes through Google's new Colab Public API (`colaboratory.googleapis.com`) instead of the tunnel API; off by default, and creating or stopping runtimes still uses the tunnel API. The hidden `colab test-public-api` checks which of the two your credentials can reach, and a 401/403 error says which flag to try. Google's API currently refuses this CLI's sign-in (403), so leave it off for now (upstream #238). (#12)
+- **tray:** an About window, from the tray menu or a click on the panel's logo: the version, what the fork adds, links to the fork, its releases and Google's original, and the license. (#12)
+
+### Changed
+
+- **tray, binary:** the fork's own logo (Colab's C with a teal ring) in the tray and the panel, and as the Windows binary's icon; the tray's status dot sits in the bottom-right corner. (#12)
+
+- **binary:** the macOS binary is built for Apple silicon (`colab-<version>-macos-arm64`) instead of Intel (`macos-x64`): GitHub's Intel macOS runners were not available. On an Intel Mac, install with uv or pip. (#12)
+
+### Fixed
+
+- **auth:** signing in no longer fails when you approve only some of the requested permissions; the CLI keeps the permissions you granted (upstream #235). (#12)
+- **auth:** `--auth=adc` without Application Default Credentials prints the `gcloud auth application-default login --scopes=...` command to run instead of a traceback, and the README names `oauth2` as the default (upstream #245). (#12)
+- **deps:** tornado 6.6.1 (upstream #246). (#12)
+
 ## [0.8.0.3] - 2026-11-13
 
 The desktop release: a tray panel for the runtimes, saved run profiles, progress over the whole run and notebooks as background jobs (docs/09_tray_and_profiles.md). Still based on Google's Colab CLI 0.8.0.
@@ -211,6 +233,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.4]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.4
 [0.8.0.3]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.3
 [0.8.0.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.2
 [0.8.0.1]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.1

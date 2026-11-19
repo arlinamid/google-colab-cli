@@ -26,17 +26,14 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - **`colab` is fire-and-forget.** Each command authenticates, does one thing, and exits.
 
 ## Authentication (the #1 thing that blocks agents)
-- The global flag is `--auth={adc,oauth2}` and the **default is `adc`** (Application Default Credentials). It must come *before* the subcommand: `colab --auth=adc new -s x`.
-- **ADC setup** (most reliable for headless/agent use). The Colab backends need a specific scope set, so re-mint ADC with all four scopes:
+- The global flag is `--auth={oauth2,adc}` and the **default is `oauth2`**. Pass `--auth=adc` *before* the subcommand to use Application Default Credentials: `colab --auth=adc new -s x`.
+- **ADC setup** (`--auth=adc`, most reliable for headless/agent use). The Colab backends need a specific scope set, so re-mint ADC with all four scopes:
   ```bash
   gcloud auth application-default login \
-    --scopes=openid,\
-  https://www.googleapis.com/auth/cloud-platform,\
-  https://www.googleapis.com/auth/userinfo.email,\
-  https://www.googleapis.com/auth/colaboratory
+      --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
   ```
-  Why all four: `userinfo.email` (session backend `colab.research.google.com`, else 401), `colaboratory` (Colab features/APIs), `openid`+`cloud-platform` (mandated by gcloud itself; it rejects scope lists missing `cloud-platform`).
-- **oauth2 setup**: `colab --auth=oauth2 <anything>` triggers a browser consent flow on first use (token cached in the OS keyring via `keyring`). Requires a client config at `~/.colab-cli-oauth-config.json` (or `-c PATH`), falling back to the bundled config. The browser step means it usually needs a human; prefer ADC for agents.
+  Why all four: `colaboratory` and `userinfo.email` (required by the session backend `colab.research.google.com`, else 401), `openid`+`cloud-platform` (mandated by gcloud itself; it rejects scope lists missing `cloud-platform`).
+- **oauth2 setup** (default): `colab <anything>` (or `colab --auth=oauth2 <anything>`) triggers a browser consent flow on first use (token cached in the OS keyring via `keyring`). Requires a client config at `~/.colab-cli-oauth-config.json` (or `-c PATH`), falling back to the bundled config. The browser step means it usually needs a human; prefer `--auth=adc` for agents.
 - **Verify auth in one shot**: `colab sessions` (read-only, lists server assignments) or `colab whoami` (hidden debug command: prints the active email, scopes, audience, and expiry). When any call 401s or 403s, the cause is almost always missing credentials or scopes — `colab whoami` shows it instantly.
 - **Do NOT confuse `colab auth` with CLI authentication.** `colab auth` injects *VM-side* GCP credentials into the running kernel (so notebook code can call BigQuery/GCS); it is orthogonal to how the CLI itself authenticates. Never suggest "run `colab auth`" to fix a CLI 401/403 — that's a scope/identity problem fixed via the `gcloud` command above.
 
@@ -126,7 +123,7 @@ Use this instead of a long `colab exec` (which blocks you and can hit `--timeout
 - **One-shot overview**: `colab tray --snapshot --json` gives every runtime with its newest job (state, `overall_percent`, epoch/cell, main metric, last-output age, diagnosis), the account balance, rate and estimated hours left, and an `icon.level` (`none`/`idle`/`running`/`warning`/`error`/`stale`). It reads job files only and never keeps a runtime alive. The GUI (`colab tray`) is for people.
 
 ## Safety
-- **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.
+- **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors. `colab stop --all` stops every local session at once; `colab stop --orphans` lists server runtimes with no local session and stops them after asking (they may be the user's own runtimes from the web UI, so check first).
 - Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
 - **Isolate parallel/agent runs** with the global `--config <path>` flag to point session state at a scratch file (e.g. `colab --config /tmp/agent.json new -s job`).
 
