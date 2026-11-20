@@ -36,7 +36,7 @@
     3.  **Finalize**: Ensure everything is complete and correct. **Whenever features are added or behaviors change, you MUST re-review the corresponding design document in `docs/` and update it to reflect the new state. You should also add a brief log entry to the frontmatter of the updated design document with the current date summarizing the change.** Finally, commit the finished changes to the git branch for review.
 
 ## Subcommand Workflows
-- **Session Management**: `new`, `sessions`, `status`, `stop`.
+- **Session Management**: `new`, `attach`, `sessions`, `status`, `stop`.
 - **Execution**: `repl`, `exec`, `ssh`.
 - **Files**: `ls`, `rm`, `upload`, `download`, `edit`.
 - **Automation**: `auth`, `drivemount`, `install`, `log`, `pay`, `version`, `update`.
