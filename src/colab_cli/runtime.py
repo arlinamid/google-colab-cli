@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 import queue
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -26,6 +27,10 @@ logger = logging.getLogger(__name__)
 # kernel websocket drops mid-execution (for example `colab stop` from another
 # terminal, or the VM being reclaimed).
 _CONNECTION_LOST = "Connection was lost"
+
+
+class KernelConnectTimeout(TimeoutError):
+    """The kernel websocket did not open in time; no code was sent."""
 
 
 class RunLimitExceeded(TimeoutError):
@@ -112,6 +117,42 @@ class ColabRuntime:
 
         wsclient.kernel_socket.on_message = hooked_on_message
 
+    def _new_kernel_client(self):
+        client_kwargs = {
+            "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
+            "extra_params": {"colab-runtime-proxy-token": self.token},
+        }
+        if self.session_id:
+            # WSSession (Session) expects 'session' for the ID
+            client_kwargs["session"] = self.session_id
+
+        # Resolve the kernel client class across
+        # jupyter-kernel-client variants:
+        # - git (googlecolab fork): ColabKernelClient(proxy_token=...)
+        # - PyPI <1.0: KernelClient(token=...)
+        # - PyPI >=1.0: JupyterKernelClient(token=...)
+        #   (KernelClient was renamed, breaking `colab exec` with
+        #   AttributeError when installed from PyPI).
+        if hasattr(jupyter_kernel_client, "ColabKernelClient"):
+            _ClientCls = jupyter_kernel_client.ColabKernelClient
+            _token_kw = "proxy_token"
+        elif hasattr(jupyter_kernel_client, "KernelClient"):
+            _ClientCls = jupyter_kernel_client.KernelClient
+            _token_kw = "token"
+        else:
+            _ClientCls = jupyter_kernel_client.JupyterKernelClient
+            _token_kw = "token"
+        return _ClientCls(
+            server_url=self.url,
+            **{_token_kw: self.token},
+            kernel_id=self.kernel_id,
+            client_kwargs=client_kwargs,
+            headers={
+                "X-Colab-Client-Agent": "colab-cli",
+                "X-Colab-Runtime-Proxy-Token": self.token,
+            },
+        )
+
     @property
     def kernel_client(self):
         if not self._kernel_client:
@@ -121,46 +162,14 @@ class ColabRuntime:
 
             for i in range(retries):
                 try:
-                    client_kwargs = {
-                        "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
-                        "extra_params": {"colab-runtime-proxy-token": self.token},
-                    }
-                    if self.session_id:
-                        # WSSession (Session) expects 'session' for the ID
-                        client_kwargs["session"] = self.session_id
-
-                    # Resolve the kernel client class across
-                    # jupyter-kernel-client variants:
-                    # - git (googlecolab fork): ColabKernelClient(proxy_token=...)
-                    # - PyPI <1.0: KernelClient(token=...)
-                    # - PyPI >=1.0: JupyterKernelClient(token=...)
-                    #   (KernelClient was renamed, breaking `colab exec` with
-                    #   AttributeError when installed from PyPI).
-                    if hasattr(jupyter_kernel_client, "ColabKernelClient"):
-                        _ClientCls = jupyter_kernel_client.ColabKernelClient
-                        _token_kw = "proxy_token"
-                    elif hasattr(jupyter_kernel_client, "KernelClient"):
-                        _ClientCls = jupyter_kernel_client.KernelClient
-                        _token_kw = "token"
-                    else:
-                        _ClientCls = jupyter_kernel_client.JupyterKernelClient
-                        _token_kw = "token"
-                    self._kernel_client = _ClientCls(
-                        server_url=self.url,
-                        **{_token_kw: self.token},
-                        kernel_id=self.kernel_id,
-                        client_kwargs=client_kwargs,
-                        headers={
-                            "X-Colab-Client-Agent": "colab-cli",
-                            "X-Colab-Runtime-Proxy-Token": self.token,
-                        },
-                    )
+                    self._kernel_client = self._new_kernel_client()
                     # Force _own_kernel to False. This prevents jupyter-kernel-client
                     # from automatically deleting the kernel when the client is closed or deleted.
                     self._kernel_client._own_kernel = False
 
                     self._kernel_client.start()
                     self._apply_ws_hook()
+                    self._wait_for_connection()
 
                     # Capture IDs if we started fresh
                     if not self.kernel_id and self._kernel_client.id:
@@ -196,6 +205,25 @@ class ColabRuntime:
                     raise e
 
         return self._kernel_client
+
+    def _wait_for_connection(self):
+        """Wait until the kernel websocket is open, or stop and raise.
+
+        jupyter_kernel_client's start() stops waiting for the websocket after
+        REQUEST_TIMEOUT (10 s) without an error. A request sent before the
+        handshake completes is lost, so the code never ran while the CLI
+        waited for its reply (upstream discussion #264).
+        """
+        timeout = float(os.getenv("COLAB_CLI_WS_CONNECT_TIMEOUT", "60"))
+        if self._kernel_client._manager.client.connection_ready.wait(timeout=timeout):
+            return
+        self.stop()
+        self._kernel_client = None
+        raise KernelConnectTimeout(
+            f"The connection to the kernel did not open within {timeout:g}s, so "
+            "nothing was run. Try again; set COLAB_CLI_WS_CONNECT_TIMEOUT "
+            "(seconds) to wait longer."
+        )
 
     def restart(
         self,
@@ -297,6 +325,8 @@ class ColabRuntime:
                     self._execute_streaming, code, wrapped_output_hook, timeout,
                     run_limit,
                 )
+            except KernelConnectTimeout:
+                raise
             except TimeoutError as e:
                 # Unlike upstream, stop the code too: a timed-out run should
                 # not keep the runtime busy (and billing) in the background.

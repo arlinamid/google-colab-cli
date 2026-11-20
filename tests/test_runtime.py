@@ -316,3 +316,50 @@ def test_streaming_without_timeout_waits_through_long_silence(monkeypatch, timeo
     outputs = runtime.execute_code("work()", timeout=timeout)
     assert outputs[0]["text"] == "done\n"
     runtime._kernel_client.interrupt.assert_not_called()
+
+
+def test_kernel_client_waits_for_the_websocket_and_gives_up_cleanly(monkeypatch):
+    """start() stops waiting for the websocket after 10 s without an error, and
+    a request sent before it opens is lost (upstream discussion #264)."""
+    from colab_cli.runtime import KernelConnectTimeout
+
+    monkeypatch.setenv("COLAB_CLI_WS_CONNECT_TIMEOUT", "5")
+    kc = MagicMock()
+    kc._manager.client.connection_ready.wait.return_value = False
+    runtime = ColabRuntime("http://url", "token123", session_name="s1")
+    monkeypatch.setattr(runtime, "_new_kernel_client", lambda: kc)
+
+    with pytest.raises(KernelConnectTimeout) as exc:
+        runtime.kernel_client
+    assert isinstance(exc.value, TimeoutError)
+    assert "nothing was run" in str(exc.value)
+    kc._manager.client.connection_ready.wait.assert_called_once_with(timeout=5.0)
+    kc._manager.client.stop_channels.assert_called_once()
+    kc._manager.client.execute.assert_not_called()
+    assert runtime._kernel_client is None
+
+
+def test_kernel_client_ready_websocket_is_used(monkeypatch):
+    kc = MagicMock()
+    kc._manager.client.connection_ready.wait.return_value = True
+    runtime = ColabRuntime("http://url", "token123")
+    monkeypatch.setattr(runtime, "_new_kernel_client", lambda: kc)
+    assert runtime.kernel_client is kc
+    kc._manager.client.stop_channels.assert_not_called()
+
+
+def test_a_connect_timeout_is_not_reported_as_an_interrupted_run(monkeypatch):
+    """Interrupting would open a second connection and wait for it again."""
+    from colab_cli.runtime import KernelConnectTimeout
+
+    monkeypatch.setenv("COLAB_CLI_WS_CONNECT_TIMEOUT", "1")
+    kc = MagicMock()
+    kc._manager.client.connection_ready.wait.return_value = False
+    runtime = ColabRuntime("http://url", "token123", session_name="s1")
+    made = []
+    monkeypatch.setattr(runtime, "_new_kernel_client", lambda: made.append(kc) or kc)
+
+    with pytest.raises(KernelConnectTimeout) as exc:
+        runtime.execute_code("1", output_hook=lambda o: None)
+    assert "interrupted" not in str(exc.value)
+    assert len(made) == 1
