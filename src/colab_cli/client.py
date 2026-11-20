@@ -247,6 +247,18 @@ class TooManyAssignmentsError(Exception):
     pass
 
 
+class AssignmentTimeoutError(TimeoutError):
+    pass
+
+
+ASSIGN_TIMEOUT_MESSAGE = (
+    "The request for a runtime timed out, and Colab had not created one when "
+    "checked again. It may still be starting: run `colab sessions`, and if it "
+    "is listed as [?], `colab stop --orphans` stops it. Set "
+    "COLAB_CLI_REQUEST_TIMEOUT (seconds) to wait longer."
+)
+
+
 class Client:
     def __init__(
         self,
@@ -485,19 +497,28 @@ class Client:
                 retryable = isinstance(
                     e, requests.exceptions.ReadTimeout
                 ) or status in (502, 503, 504)
-                if not retryable or attempt >= retries:
+                if not retryable:
                     raise
+                last = attempt >= retries
                 delay = backoff * (2**attempt)
                 self.logger.warning(
-                    "Assignment request failed; retrying in %.0fs", delay
+                    "Assignment request failed; %s in %.0fs",
+                    "checking whether it was created" if last else "retrying",
+                    delay,
                 )
                 time.sleep(delay)
-                # Reconcile an uncertain POST before submitting the same request again.
+                # Reconcile an uncertain POST before submitting the same request
+                # again, and once more after the last one: the backend may have
+                # created the runtime although the response never arrived.
                 assignment = self._get_assignment(
                     notebook_hash, variant, accelerator, shape
                 )
                 if isinstance(assignment, Assignment):
                     return assignment
+                if last:
+                    if isinstance(e, requests.exceptions.ReadTimeout):
+                        raise AssignmentTimeoutError(ASSIGN_TIMEOUT_MESSAGE) from e
+                    raise
 
         return res
 
