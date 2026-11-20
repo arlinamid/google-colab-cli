@@ -14,6 +14,7 @@
 
 import base64
 import json
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -659,7 +660,17 @@ def test_upload_dir_normalizes_remote_dir(mock_request, client, tmp_path):
 
 @pytest.mark.parametrize(
     "bad_name",
-    ["C:evil.txt", "D:evil.txt", 123, "bad\x00name", "", ".", "..", "a\\b", "a/b"],
+    [
+        pytest.param(
+            name,
+            marks=pytest.mark.skipif(
+                sys.platform != "win32",
+                reason="a drive prefix only means something on Windows",
+            ),
+        )
+        for name in ("C:evil.txt", "D:evil.txt")
+    ]
+    + [123, "bad\x00name", "", ".", "..", "a\\b", "a/b"],
 )
 @patch("colab_cli.contents.requests.Session.request")
 def test_download_dir_rejects_unsafe_entry_variants(
@@ -766,3 +777,27 @@ def test_context_manager_closes_session(session):
         with c as entered:
             assert entered is c
         m_close.assert_called_once_with()
+
+
+@patch("colab_cli.contents.requests.Session.request")
+def test_download_dir_refuses_a_symlinked_destination_with_a_trailing_slash(
+    mock_request, client, tmp_path
+):
+    """os.path.islink("link/") is False: the slash resolves the link."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need extra rights here")
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "solo.txt", "type": "file", "format": "text", "content": "x",
+    }
+    mock_request.return_value = mock_resp
+
+    with pytest.raises(ValueError, match="symlink"):
+        client.download_dir("content/solo.txt", f"{link}/")
+    assert not (outside / "solo.txt").exists()
