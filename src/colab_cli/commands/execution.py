@@ -482,6 +482,9 @@ def _exec(state, session, file, output_image, timeout, env, secret, cells,
             "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
         )
     except Exception as e:
+        # The try/finally that stops the runtime starts later; without this
+        # the kernel websocket thread (not a daemon) kept the process alive.
+        runtime.stop()
         if is_terminal_error(e):
             typer.echo(
                 f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
@@ -742,6 +745,9 @@ def repl(
             "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
         )
     except Exception as e:
+        # The try/finally that stops the runtime starts later; without this
+        # the kernel websocket thread (not a daemon) kept the process alive.
+        runtime.stop()
         if is_terminal_error(e):
             typer.echo(
                 f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."

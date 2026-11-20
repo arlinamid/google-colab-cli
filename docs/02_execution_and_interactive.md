@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: A slow kernel websocket no longer loses the code or hangs the CLI (upstream discussion #264). `jupyter_kernel_client`'s `start()` stops waiting for the handshake after 10 s without an error, and a request sent before it completes is lost. `ColabRuntime` now waits for `connection_ready` up to `COLAB_CLI_WS_CONNECT_TIMEOUT` seconds (default 60) before sending anything; if it does not open, the client is stopped and `KernelConnectTimeout` (a `TimeoutError`, one `[colab]` line, exit 1) says nothing was run. `exec` and `repl` also stop the runtime when the `/content` prelude fails: their `try/finally` starts after it, and the websocket thread (not a daemon) had kept the process alive for up to an hour. Reproduced live with the handshake delayed 12 s: the old code printed "Lost the connection" and hung until killed; the new one ran the code, or with a short limit exited after the message.
 2026-11-13: `colab exec --var NAME=JSON` sets Python globals once, before the first cell (`build_var_prelude`). While it runs, exec records the current cell in `SessionState.activity` (file, cell, total, label, started_at), cleared at the end; `colab status` prints it and the tray reads it (docs/09).
 2026-11-12: `colab exec --budget CU`: the whole exec is limited to the time the budget lasts at the account's hourly rate (`RunLimitExceeded` in the streaming loop, which interrupts the kernel); exit 5, diagnosis `budget_reached`. `--json` summaries carry a `cost` block (`cost.py`).
 2026-11-12: `colab exec --json` / `--json-stream` (and `COLAB_CLI_JSON=1`): one JSON record per executed block and a summary on stdout, human output on stderr. Records keep the upstream #237 fields and add `error.location` (the failing line in the local file or notebook cell, past the `--env` prelude), `diagnosis` with `next_actions`, `duration_s` and `session`. Under `--json` a lost session exits 3 and a timeout 4. See docs/08_agent_feedback.md.
@@ -52,6 +53,7 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
 - **Kernel Management**: `ColabRuntime` (from `colab-agent`) already handles message signing and message types.
 - **Output Streaming**: Continuous polling or asynchronous message handling to provide real-time output.
 - **Piping Example**: `cat script.py | colab exec -s my-session`.
+- **Kernel connection**: the kernel websocket must be open before any request is sent. `ColabRuntime` waits for it up to `COLAB_CLI_WS_CONNECT_TIMEOUT` seconds (default 60), then stops the client and raises `KernelConnectTimeout` ("nothing was run"). Every path that creates the runtime stops it again, including when the `/content` prelude fails.
 
 ## Testing Strategy
 TDD is mandatory for all execution features.
