@@ -199,3 +199,8 @@ def test_orphan_card_stops_by_endpoint():
     assert "m-s-web-123" in opts["runtime"] and "Colab web UI" in opts["runtime"]
     assert "Colab webes" in dict(a.stop_options(orphan, has_service=False, lang="hu"))["runtime"]
     assert a.stop_argv(orphan, "runtime") == ["stop", "--endpoint", "m-s-web-123"]
+
+
+def test_attach_argv_for_an_orphan():
+    orphan = _card(name="?", local=False, endpoint="m-s-web-123", job_id=None, can_stop_job=False)
+    assert a.attach_argv(orphan) == ["attach", "--endpoint", "m-s-web-123"]

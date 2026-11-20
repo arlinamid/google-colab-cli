@@ -133,11 +133,14 @@ def test_many_runtimes_scroll(tray):
     assert tray.panel.cards_host.sizeHint().height() > tray.panel.scroll.height()
 
 
-def test_an_orphan_card_can_only_be_stopped(tray, mocker):
+def test_an_orphan_card_can_be_attached_or_stopped(tray, mocker):
     _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
     card = tray.panel.cards[0]
     buttons = card.findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["Leállítás"]
+    assert [b.text() for b in buttons] == ["Csatlakozás", "Leállítás"]
+    buttons[0].click()
+    assert tray.popen.call_args.args[0] == ["colab", "attach", "--endpoint", "m-s-web-123"]
+    buttons = buttons[1:]
     texts = [w.text() for w in card.findChildren(QLabel)]
     assert "m-s-web-123" in texts
     assert any("Colab webes felületén" in x for x in texts)

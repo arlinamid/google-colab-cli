@@ -138,6 +138,7 @@ class Panel(QWidget):
     ssh_clicked = Signal(dict)
     open_clicked = Signal(dict)
     stop_clicked = Signal(dict)
+    attach_clicked = Signal(dict)
     profile_clicked = Signal(str)
     refresh_clicked = Signal()
     settings_clicked = Signal()
@@ -374,8 +375,14 @@ class Panel(QWidget):
             # Still being created: no runtime to open a log, SSH or stop yet.
             return frame
         buttons = QHBoxLayout()
-        # A runtime unknown to this CLI has no session for a log or SSH; it
-        # can only be stopped, by its endpoint.
+        # A runtime unknown to this CLI (opened in the web UI, or on another
+        # computer) has no session for a log or SSH: it can be attached as
+        # one, or stopped by its endpoint.
+        if not card["local"]:
+            b = QPushButton(t(lang, "attach"), objectName="action")
+            b.setIcon(glyph_icon("open", TEXT))
+            b.clicked.connect(lambda _=False, c=card: self.attach_clicked.emit(c))
+            buttons.addWidget(b)
         for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked)):
             if not card["local"]:
                 break

@@ -515,8 +515,74 @@ def stop(
     typer.echo("[colab] Session terminated.")
 
 
+def attach(
+    endpoint: Annotated[
+        str,
+        typer.Option(
+            "--endpoint",
+            help="The runtime to attach, by the endpoint `colab sessions` lists.",
+        ),
+    ],
+    session: Annotated[
+        Optional[str],
+        typer.Option(
+            "-s",
+            "--session",
+            help="Name for the local session (default: web-<id>).",
+        ),
+    ] = None,
+):
+    """Attach a runtime opened elsewhere (Colab web UI) as a local session"""
+    from colab_cli.common import state
+
+    sessions, assignments = state.sync_sessions()
+    assignment = next((a for a in assignments if a.endpoint == endpoint), None)
+    if assignment is None:
+        typer.echo(f"[colab] No runtime with endpoint '{endpoint}' on the server.", err=True)
+        raise typer.Exit(code=1)
+    owner = next((n for n, s in sessions.items() if s.endpoint == endpoint), None)
+    if owner:
+        typer.echo(f"[colab] Runtime {endpoint} is already the session '{owner}'.")
+        return
+    name = session or f"web-{endpoint.rsplit('-', 1)[-1][:6]}"
+    if state.store.get(name):
+        typer.echo(
+            f"[colab] A session named '{name}' already exists; choose another with -s.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    proxy = assignment.runtime_proxy_info
+    s = SessionState(
+        name=name,
+        token=proxy.token,
+        url=proxy.url,
+        endpoint=endpoint,
+        token_expires_at=proxy.expires_at(),
+        variant=assignment.variant.name,
+        accelerator=assignment.accelerator.value,
+        machine_shape=assignment.machine_shape.name,
+    )
+    state.store.add(s)
+    state.history.log_event(
+        name,
+        "session_attached",
+        {"endpoint": endpoint, "accelerator": s.accelerator, "variant": s.variant},
+    )
+    typer.echo(f"[colab] Attached runtime {endpoint} as session '{name}'.")
+    typer.echo(
+        f"[colab] Use it like any session: colab exec -s {name}, colab ssh -s {name}, "
+        f"colab upload -s {name} ..."
+    )
+    typer.echo(
+        "[colab] The CLI runs code in its own kernel, not in the notebook's; files "
+        f"under /content are shared. `colab stop -s {name}` stops it there too."
+    )
+
+
 def register(app: typer.Typer):
     app.command()(new)
+    app.command()(attach)
     app.command(name="sessions")(sessions_command)
     app.command(name="restart-kernel")(restart_kernel)
     app.command()(status)

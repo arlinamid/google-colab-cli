@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: `colab attach --endpoint ID [-s NAME]` saves a runtime that has no local session (opened in the Colab web UI, or by colab on another computer) as a local session, from the assignment's proxy URL and token (`/tun/m/assignments`), so every session command works on it. Default name `web-<first 6 of the id's last part>`; an endpoint that is already a session says so; an unknown endpoint exits 1; an existing name exits 2. The CLI starts its own kernel; `/content` is shared with the notebook. Tested live: a web UI runtime attached, then files uploaded with `colab upload`, over `colab ssh -- sh -c 'cat > ...'` and with Windows OpenSSH scp through `colab ssh --proxy-mode`; all three showed in the notebook's Files panel.
 2026-11-20: Listed the fork code that keys runtimes by `endpoint` and has to follow upstream #260 (Public API assign/unassign) once it lands; see TODO.
 2026-11-20: `colab stop --endpoint <id>` stops one runtime by the endpoint `colab sessions` lists, also one with no local session (`[?]`, e.g. opened in the Colab web UI); an endpoint of a local session stops that session as `-s` does, an unknown one exits 1, and it cannot be combined with `-s`, `--orphans` or `--all` (exit 2). The tray's Stop button uses it for such runtimes.
 2026-11-20: After the last allocation POST fails with `ReadTimeout` or 502/503/504, `Client.assign` waits one more backoff step and queries the notebook hash again, so a runtime the backend created after the timeout is returned and `colab new` / `colab run` save it instead of leaving a `[?]` orphan (upstream issue #263). If it is still not there, a timeout raises `AssignmentTimeoutError` (a `TimeoutError`, printed as one `[colab]` line) that points to `colab sessions`, `colab stop --orphans` and `COLAB_CLI_REQUEST_TIMEOUT`. Verified live with `COLAB_CLI_REQUEST_TIMEOUT=1 COLAB_CLI_ASSIGN_RETRIES=0`.
@@ -110,6 +111,12 @@ Regression tests cover timeout precedence, same-request recovery, refreshed
 tokens, retry limits, exponential backoff and permanent-error handling. A live
 allocation/recovery test is also required before declaring the behavior verified
 end to end; mocked timeouts alone do not establish backend compatibility.
+
+### 0. Attach a Runtime (`colab attach`)
+- **Purpose**: use a runtime that was not created by this CLI (opened in the Colab web UI, or by colab on another computer; `[?]` in `colab sessions`) as a local session, e.g. to upload files to a notebook's runtime over `colab upload`, `colab ssh` or scp.
+- **How**: `sync_sessions()` lists the assignments; the one with the given endpoint becomes a `SessionState` with its `runtimeProxyInfo` token, URL and expiry, accelerator, variant and machine shape. Token refresh then works like for any session. No kernel is recorded, so the first `exec` starts the CLI's own kernel (the notebook's kernel and variables are not shared; files under `/content` are).
+- **Errors**: unknown endpoint, exit 1; already a local session, prints its name, exit 0; `-s NAME` taken by another session, exit 2.
+- **Stopping**: `colab stop -s NAME` stops the runtime in the web UI too.
 
 ### 1. New Session (`colab new`)
 - **API**: `GET https://colab.sandbox.google.com/tun/m/assign` (based on HAR).
