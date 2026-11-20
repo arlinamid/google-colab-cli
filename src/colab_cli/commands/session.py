@@ -402,6 +402,26 @@ def _stop_orphans(yes: bool) -> None:
         raise typer.Exit(code=1)
 
 
+def _stop_endpoint(endpoint: str) -> None:
+    """Stops the runtime with this endpoint, local session or not.
+
+    The endpoint is the id `colab sessions` lists; the tray uses this for a
+    runtime with no local session, such as one opened in the Colab web UI.
+    """
+    from colab_cli.common import state
+
+    sessions, assignments = state.sync_sessions()
+    if endpoint not in {a.endpoint for a in assignments}:
+        typer.echo(f"[colab] No runtime with endpoint '{endpoint}' on the server.", err=True)
+        raise typer.Exit(code=1)
+    owner = next((n for n, s in sessions.items() if s.endpoint == endpoint), None)
+    if owner:
+        _stopOne(owner, sessions[owner])
+        return
+    state.client.unassign(endpoint)
+    typer.echo(f"[colab] Stopped {endpoint}.")
+
+
 def _stopOne(name: str, s: SessionState) -> None:
     """Terminate a single session (kernel, backend, local store)."""
     from colab_cli.common import state
@@ -439,9 +459,29 @@ def stop(
     allSessions: Annotated[
         bool, typer.Option("--all", help="Stop all active sessions")
     ] = False,
+    endpoint: Annotated[
+        Optional[str],
+        typer.Option(
+            "--endpoint",
+            help=(
+                "Stop the runtime with this endpoint (the id `colab sessions` "
+                "lists), also one with no local session."
+            ),
+        ),
+    ] = None,
 ):
     """Stop a session, all sessions with --all, or with --orphans the runtimes no local session knows"""
     from colab_cli.common import state
+
+    if endpoint is not None:
+        if session or orphans or allSessions:
+            typer.echo(
+                "[colab] Use --endpoint alone, not with -s NAME, --orphans or --all.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        _stop_endpoint(endpoint)
+        return
 
     if allSessions and (session or orphans):
         typer.echo(

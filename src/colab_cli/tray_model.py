@@ -293,6 +293,7 @@ def card_model(entry: Dict[str, Any], now: float, services: Optional[Set[str]] =
     activity = entry.get("activity") if entry.get("running") else None
     card: Dict[str, Any] = {
         "name": entry["name"],
+        "endpoint": entry.get("endpoint"),
         "hardware": entry["hardware"],
         "local": entry["local"],
         "profile": entry.get("profile"),

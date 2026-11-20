@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
@@ -70,6 +71,7 @@ ABOUT_LINKS = (
     ("about.releases", "https://github.com/arlinamid/google-colab-cli/releases"),
     ("about.upstream", "https://github.com/googlecolab/google-colab-cli"),
 )
+DIALOG_WIDTH = 420
 START_REFRESH_MS = 10_000  # refresh this often while a profile's runtime is being created
 _RUN_LOG_PART = 64 * 1024
 
@@ -372,16 +374,27 @@ class TrayApp(QObject):
     def choose_stop(self, card, options) -> Optional[str]:
         """The stop dialog; returns "job", "runtime" or None (cancel)."""
         dialog = QDialog()
-        dialog.setWindowTitle(t(self.lang, "stop.title", name=card["name"]))
+        dialog.setFixedWidth(DIALOG_WIDTH)
+        title = t(self.lang, "stop.title", name=actions.display_name(card))
+        dialog.setWindowTitle(title)
         box = QVBoxLayout(dialog)
-        box.addWidget(QLabel(t(self.lang, "stop.title", name=card["name"])))
+        heading = QLabel(title, wordWrap=True)
+        heading.setStyleSheet("font-weight: 600;")
+        box.addWidget(heading)
         radios = []
         for i, (key, text) in enumerate(options):
-            r = QRadioButton(text)
+            # A radio button does not wrap its text: the long explanations
+            # go in a wrapping label beside it, which selects it on click.
+            r = QRadioButton()
             r.setChecked(i == 0)
             r.setProperty("choice", key)
+            label = QLabel(text, wordWrap=True)
+            label.mousePressEvent = lambda _e, r=r: r.setChecked(True)
+            row = QHBoxLayout()
+            row.addWidget(r, 0, Qt.AlignTop)
+            row.addWidget(label, 1)
             radios.append(r)
-            box.addWidget(r)
+            box.addLayout(row)
         buttons = QDialogButtonBox()
         buttons.addButton(QPushButton(t(self.lang, "stop")), QDialogButtonBox.AcceptRole)
         buttons.addButton(QPushButton(t(self.lang, "cancel")), QDialogButtonBox.RejectRole)
@@ -404,7 +417,12 @@ class TrayApp(QObject):
         dialog.adjustSize()
         anchor = self.panel.frameGeometry() if self.panel.isVisible() else (
             QGuiApplication.primaryScreen().availableGeometry())
-        dialog.move(anchor.center() - dialog.rect().center())
+        screen = (QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()).availableGeometry()
+        dialog.resize(min(dialog.width(), screen.width()), min(dialog.height(), screen.height()))
+        pos = anchor.center() - dialog.rect().center()
+        pos.setX(max(screen.left(), min(pos.x(), screen.right() - dialog.width())))
+        pos.setY(max(screen.top(), min(pos.y(), screen.bottom() - dialog.height())))
+        dialog.move(pos)
 
         def bring_up():
             dialog.raise_()
@@ -422,7 +440,7 @@ class TrayApp(QObject):
         choice = self.choose_stop(card, actions.stop_options(card, has_service, self.lang))
         if not choice:
             return
-        if choice == "runtime":
+        if choice == "runtime" and card["local"]:
             self.stopping.add(card["name"])
             for name, child in list(self.children.items()):
                 if child["session"] == card["name"] and child["proc"].poll() is None:

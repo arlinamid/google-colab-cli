@@ -73,12 +73,19 @@ def card_lines(card: Dict[str, Any], lang: str) -> Dict[str, Optional[str]]:
     return {"subtitle": subtitle, "metric": metric, "detail": " · ".join(parts) or None}
 
 
+def display_name(card: Dict[str, Any]) -> str:
+    """The session name, or the endpoint of a runtime with no local session."""
+    return card["name"] if card["local"] else card.get("endpoint") or card["name"]
+
+
 def stop_options(card: Dict[str, Any], has_service: bool, lang: str) -> List[Tuple[str, str]]:
     """The choices of the stop dialog; each says plainly what stops."""
     options = []
     if card["can_stop_job"] and card["job_id"]:
         options.append(("job", t(lang, "stop.job", job=card["job_id"])))
-    runtime = t(lang, "stop.runtime", name=card["name"], hw=hardware_label(card["hardware"]))
+    runtime = t(lang, "stop.runtime", name=display_name(card), hw=hardware_label(card["hardware"]))
+    if not card["local"]:
+        runtime += " " + t(lang, "stop.orphan")
     if has_service:
         runtime += " " + t(lang, "stop.service")
     options.append(("runtime", runtime))
@@ -88,6 +95,8 @@ def stop_options(card: Dict[str, Any], has_service: bool, lang: str) -> List[Tup
 def stop_argv(card: Dict[str, Any], choice: str) -> List[str]:
     if choice == "job":
         return ["job", "stop", "-s", card["name"], card["job_id"]]
+    if not card["local"]:
+        return ["stop", "--endpoint", card["endpoint"]]
     return ["stop", "-s", card["name"]]
 
 

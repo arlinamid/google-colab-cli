@@ -112,6 +112,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab stop [-s NAME]` | Terminate a session VM and release its resources |
 | `colab stop --all` | Stop every local session the server still has |
 | `colab stop --orphans [--yes]` | List server-side runtimes with no local session (`[?]` in `colab sessions`) and stop them after confirmation |
+| `colab stop --endpoint ID` | Stop one runtime by the endpoint `colab sessions` lists, also one opened in the Colab web UI |
 | `colab url [-s NAME] [--open]` | Print or open a browser URL connecting to the active session |
 
 ### Execution
