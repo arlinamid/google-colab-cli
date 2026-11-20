@@ -149,3 +149,35 @@ def _alive(pid):
         text=True,
     ).stdout
     return str(pid) in out
+
+
+# ---------- colab stop --endpoint -----------------------------------------
+
+
+def test_endpoint_stops_a_runtime_with_no_local_session(server):
+    result = runner.invoke(app, ["stop", "--endpoint", "ep-a"])
+    assert result.exit_code == 0, result.output
+    assert [c.args[0] for c in server.client.unassign.call_args_list] == ["ep-a"]
+    assert "Stopped ep-a" in result.output
+    server.store.remove.assert_not_called()
+
+
+def test_endpoint_of_a_local_session_stops_that_session(server):
+    result = runner.invoke(app, ["stop", "--endpoint", "ep-mine"])
+    assert result.exit_code == 0, result.output
+    assert [c.args[0] for c in server.client.unassign.call_args_list] == ["ep-mine"]
+    server.store.remove.assert_called_once_with("mine")
+
+
+def test_unknown_endpoint_stops_nothing(server):
+    result = runner.invoke(app, ["stop", "--endpoint", "ep-gone"])
+    assert result.exit_code == 1
+    assert "ep-gone" in result.output
+    server.client.unassign.assert_not_called()
+
+
+@pytest.mark.parametrize("extra", [["-s", "mine"], ["--orphans"], ["--all"]])
+def test_endpoint_goes_alone(server, extra):
+    result = runner.invoke(app, ["stop", "--endpoint", "ep-a", *extra])
+    assert result.exit_code == 2
+    server.client.unassign.assert_not_called()

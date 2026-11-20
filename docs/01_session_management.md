@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: `colab stop --endpoint <id>` stops one runtime by the endpoint `colab sessions` lists, also one with no local session (`[?]`, e.g. opened in the Colab web UI); an endpoint of a local session stops that session as `-s` does, an unknown one exits 1, and it cannot be combined with `-s`, `--orphans` or `--all` (exit 2). The tray's Stop button uses it for such runtimes.
 2026-11-18: Merged upstream `colab stop --all` (#256) next to this fork's `--orphans`: `--all` stops every local session the server still knows (`sync_sessions`), `--orphans` the server runtimes with no local session; `--all` with `-s` or `--orphans` exits 2. `_stopOne` keeps passing `session_name` to `ColabRuntime`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-13: The session and settings stores create their directory before the lock: filelock opens the lock file in its constructor, so on a fresh machine (no `~/.config/colab-cli` yet, which the debug log used to create first) `settings.json.lock` failed with FileNotFoundError.
@@ -124,6 +125,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 - **Cleanup**: Remove the session from the local state file upon successful 204 response.
 - **`--all`**: Stops every local session that is still assigned on the server (`state.sync_sessions()`), one by one, then prints `Stopped N session(s).` It cannot be combined with `-s` or `--orphans` (exit 2).
 - **`--orphans [--yes]`**: Lists server-side runtimes with no local session and unassigns them after confirmation.
+- **`--endpoint <id>`**: Stops the one runtime with this endpoint (as `colab sessions` lists it), without asking, whether or not a local session knows it. If a local session has that endpoint it is stopped like `-s NAME` (kernel, backend, local state); an endpoint the server does not list exits 1. It must be used alone (exit 2 with `-s`, `--orphans` or `--all`).
 
 ### 4. Session Listing (`colab sessions`)
 - **API**: `GET https://colab.research.google.com/tun/m/assignments` (based on `colab-agent` implementation).

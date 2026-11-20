@@ -64,7 +64,7 @@ def test_card_without_progress_names_the_last_output():
 def test_orphan_card_says_so():
     lines = a.card_lines(_card(local=False, name="?", state="idle", job_id=None), "en")
     assert "not in the local session list" in lines["subtitle"]
-    assert lines["detail"].endswith("stop it with: colab stop --orphans")
+    assert lines["detail"].endswith("it may be open in the Colab web UI or on another computer")
 
 
 def test_stop_options_say_what_stops():
@@ -188,3 +188,14 @@ def test_terminal_presets_per_platform():
     linux = dict(a.terminal_presets("linux"))
     assert linux["GNOME Terminal"] == "gnome-terminal -- {cmd}" and "Konsole" in linux
     assert all("{cmd}" in tpl for _, tpl in a.terminal_presets("linux") + a.terminal_presets("darwin"))
+
+
+def test_orphan_card_stops_by_endpoint():
+    orphan = _card(name="?", local=False, endpoint="m-s-web-123", job_id=None, can_stop_job=False)
+    assert a.display_name(orphan) == "m-s-web-123"
+    assert a.display_name(_card()) == "train-t4"
+    opts = dict(a.stop_options(orphan, has_service=False, lang="en"))
+    assert set(opts) == {"runtime"}
+    assert "m-s-web-123" in opts["runtime"] and "Colab web UI" in opts["runtime"]
+    assert "Colab webes" in dict(a.stop_options(orphan, has_service=False, lang="hu"))["runtime"]
+    assert a.stop_argv(orphan, "runtime") == ["stop", "--endpoint", "m-s-web-123"]

@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: A runtime with no local session (one opened in the Colab web UI or on another computer) can be stopped from the panel. Its card shows the endpoint instead of `?`, says where it may be open, and has only a Stop button (no session for Log or SSH); Stop runs `colab stop --endpoint <id>` after a dialog that says it stops there too. Before, the card had no buttons, only the `colab stop --orphans` hint. Dialogs have a fixed width with wrapped texts (the radio buttons do not wrap, so each choice is a wrapping label beside one) and are kept inside the screen. Card heights are measured after styling and with word wrap (`totalHeightForWidth(CARDS_WIDTH)`), which had cut off a card's last line and buttons. Tested live with two web UI runtimes stopped from the panel.
 2026-11-19: The panel image (`docs/images/tray_panel_training.png`) rendered again with the fork's own logo; the 2026-11-13 image still showed the earlier orange logo. Same example data as before (the demo profile at epoch 2 of 5, no account balance or own profiles).
 2026-11-18: About window (`TrayApp.open_about`): the logo, "Hybrid edition", the installed version (`auto_update.get_app_version`, selectable), what the fork adds, links to this fork, its releases and Google's original, and the Apache 2.0 license; English and Hungarian. Opened from the tray menu (Refresh now, Settings, About, Quit) and by clicking the logo in the panel header (`Panel.about_clicked`, tooltip "About"). Checked on screenshots of the dialog and the panel rendered with Windows fonts.
 2026-11-14: The fork's own logo (`tray/colab.svg`): Colab's C, and a teal ring (#16A6B6, #087783) in place of the orange one, so the fork's tray and binary are told apart from Google's tools. The tray draws it with its status dot as before. The Windows binary has it as its icon: `packaging/build_binary.py` draws it with Qt on a transparent square at 16–256 px into `build/colab.ico` (PNG images in an .ico) and `colab.spec` sets `icon=`; Linux and macOS binaries have no icon of their own (a macOS icon needs an .app bundle). Live: the local Windows build shows the logo in Explorer (the 32 px icon read back from the exe: the C orange, the ring teal), `tray --self-check` ok.
@@ -248,7 +249,9 @@ run it on each binary.
 - **Stop** asks first, and each choice says what stops: only the job (the
   runtime keeps running and using CU) or the whole runtime (unsaved files
   are lost; a forward or service the tray started is closed too). Without a
-  running job only the runtime can be stopped.
+  running job only the runtime can be stopped. A runtime with no local
+  session is stopped by its endpoint (`colab stop --endpoint`), and the
+  dialog says it may be open in the Colab web UI or on another computer.
 - **Log** opens a window that runs `colab job tail -n 200` (Follow adds
   `--follow` while the job runs) or, without a job, `colab log -n 200`, and
   shows the output as it comes; a help line says what it shows and where the

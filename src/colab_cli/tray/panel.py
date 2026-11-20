@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from colab_cli.tray.actions import display_name
 from colab_cli.tray.glyphs import icon as glyph_icon
 from colab_cli.tray.glyphs import pixmap as glyph_pixmap
 from colab_cli.tray.i18n import fmt_number, t
@@ -43,6 +44,8 @@ from colab_cli.tray.icon import logo_pixmap
 WIDTH = 400
 CARD_MIN_HEIGHT = 96
 MAX_VISIBLE_CARDS = 3
+# The width a card gets: the panel minus its outer and body margins.
+CARDS_WIDTH = WIDTH - 32
 
 DOT = {
     "running": "#34a853", "service": "#34a853", "stalled": "#f9ab00", "idle": "#9aa0a6",
@@ -319,7 +322,14 @@ class Panel(QWidget):
             self.cards_layout.addWidget(frame)
         # As tall as the first MAX_VISIBLE_CARDS cards; more scroll.
         visible = self.cards[:MAX_VISIBLE_CARDS]
-        height = sum(c.sizeHint().height() for c in visible) + 8 * max(len(visible) - 1, 0)
+        # sizeHint ignores word wrap, which left the last line and the
+        # buttons of a card with a long detail line under the edge.
+        for c in visible:
+            c.ensurePolished()
+            for child in c.findChildren(QWidget):
+                child.ensurePolished()
+        height = sum(c.layout().totalHeightForWidth(CARDS_WIDTH) for c in visible)
+        height += 8 * max(len(visible) - 1, 0)
         self.scroll.setFixedHeight(height if visible else 40)
 
     def _card(self, item, lang) -> QFrame:
@@ -333,7 +343,7 @@ class Panel(QWidget):
         top.addWidget(_dot(DOT.get(card["state"], "#9aa0a6"), 12), 0, Qt.AlignTop)
         names = QVBoxLayout()
         names.setSpacing(0)
-        name = _label(card["name"])
+        name = _label(display_name(card))
         name.setStyleSheet("font-size: 16px; font-weight: 600;")
         names.addWidget(name)
         names.addWidget(_label(lines["subtitle"], "muted"))
@@ -363,15 +373,14 @@ class Panel(QWidget):
         if card.get("pending"):
             # Still being created: no runtime to open a log, SSH or stop yet.
             return frame
-        if not card["local"]:
-            # Unknown to this CLI: no session name to act on (see the hint).
-            return frame
         buttons = QHBoxLayout()
-        enabled = card["local"]
+        # A runtime unknown to this CLI has no session for a log or SSH; it
+        # can only be stopped, by its endpoint.
         for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked)):
+            if not card["local"]:
+                break
             b = QPushButton(t(lang, key), objectName="action")
             b.setIcon(glyph_icon(glyph, TEXT))
-            b.setEnabled(enabled)
             b.clicked.connect(lambda _=False, c=card, s=signal: s.emit(c))
             buttons.addWidget(b)
         if item.get("open_url"):

@@ -26,7 +26,7 @@ try:  # no PySide6, or no GL/xkb libraries for Qt on a bare Linux box
     from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton
 
     from colab_cli.tray import app as tray_app
-    from colab_cli.tray.panel import MAX_VISIBLE_CARDS
+    from colab_cli.tray.panel import CARDS_WIDTH, MAX_VISIBLE_CARDS
 except ImportError as e:
     pytest.skip(f"Qt is not usable here: {e}", allow_module_level=True)
 
@@ -128,16 +128,32 @@ def test_many_runtimes_scroll(tray):
 
     assert len(tray.panel.cards) == 5
     first = tray.panel.cards[:MAX_VISIBLE_CARDS]
-    assert tray.panel.scroll.height() == sum(c.sizeHint().height() for c in first) + 8 * (len(first) - 1)
+    heights = [c.layout().totalHeightForWidth(CARDS_WIDTH) for c in first]
+    assert tray.panel.scroll.height() == sum(heights) + 8 * (len(first) - 1)
     assert tray.panel.cards_host.sizeHint().height() > tray.panel.scroll.height()
 
 
-def test_an_orphan_card_has_no_actions(tray):
-    _render(tray, [_entry("?", None, local=False)])
+def test_an_orphan_card_can_only_be_stopped(tray, mocker):
+    _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
     card = tray.panel.cards[0]
-    assert card.findChildren(QPushButton) == []
+    buttons = card.findChildren(QPushButton)
+    assert [b.text() for b in buttons] == ["Leállítás"]
     texts = [w.text() for w in card.findChildren(QLabel)]
-    assert "leállítás: colab stop --orphans" in texts
+    assert "m-s-web-123" in texts
+    assert any("Colab webes felületén" in x for x in texts)
+    mocker.patch.object(tray, "choose_stop", return_value="runtime")
+
+    buttons[0].click()
+
+    assert tray.popen.call_args.args[0] == ["colab", "stop", "--endpoint", "m-s-web-123"]
+
+
+def test_a_card_with_wrapped_text_is_not_cut_off(tray):
+    _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
+    card = tray.panel.cards[0]
+    needed = card.layout().totalHeightForWidth(CARDS_WIDTH)
+    assert needed > card.sizeHint().height()
+    assert tray.panel.scroll.height() >= needed
 
 
 def test_no_progress_shows_the_last_output(tray):
@@ -536,3 +552,47 @@ def test_clicking_the_panel_logo_opens_about(tray, mocker):
 
     opened.assert_called_once()
     assert tray.panel.logo_button.toolTip() == "Névjegy"
+
+
+def test_stop_an_orphan_by_its_endpoint(tray, mocker):
+    _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
+    choose = mocker.patch.object(tray, "choose_stop", return_value="runtime")
+
+    card = tray.view(now=NOW)["cards"][0]["card"]
+    assert card["endpoint"] == "m-s-web-123"
+    tray.ask_stop(card)
+
+    assert "m-s-web-123" in dict(choose.call_args.args[1])["runtime"]
+    assert tray.popen.call_args.args[0] == ["colab", "stop", "--endpoint", "m-s-web-123"]
+    assert "?" not in tray.stopping
+
+
+def test_stop_dialog_wraps_its_long_texts(tray, mocker):
+    _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
+    card = tray.view(now=NOW)["cards"][0]["card"]
+    seen = {}
+
+    def fake_run(dialog):
+        dialog.adjustSize()
+        seen["width"] = dialog.width()
+        seen["labels"] = [w for w in dialog.findChildren(QLabel) if "Colab webes" in w.text()]
+        return 0
+
+    mocker.patch.object(tray, "run_dialog", side_effect=fake_run)
+    options = tray_app.actions.stop_options(card, False, "hu")
+    assert tray.choose_stop(card, options) is None
+    assert seen["width"] <= tray_app.DIALOG_WIDTH + 40
+    assert seen["labels"] and all(w.wordWrap() for w in seen["labels"])
+
+
+def test_dialogs_stay_on_the_screen(tray, mocker):
+    from PySide6.QtWidgets import QDialog
+
+    dialog = QDialog()
+    dialog.resize(5000, 300)
+    mocker.patch.object(dialog, "exec", return_value=0)
+    tray.run_dialog(dialog)
+    screen = tray_app.QGuiApplication.primaryScreen().availableGeometry()
+    assert screen.contains(dialog.frameGeometry().topLeft())
+    assert dialog.width() <= screen.width()
+    dialog.deleteLater()
