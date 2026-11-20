@@ -299,23 +299,27 @@ def test_explain_handshake_failure_mapping(status, body, must_contain):
 
 _FALLBACK_429 = (
     "Already-active SSH session (HTTP 429): another `colab ssh` is "
-    "connected to this runtime. Disconnect it and retry."
+    "connected to this runtime. Disconnect it and retry. "
+    "If the previous client died, retry with `--force`."
 )
 _LIMIT_BODY_PREFIX = b'{"error":"already-active-session","limit":'
 _LIMIT_1_TEXT = (
     "SSH session limit reached (HTTP 429): 1 of 1 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_2_TEXT = (
     "SSH session limit reached (HTTP 429): 2 of 2 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_4_TEXT = (
     "SSH session limit reached (HTTP 429): 4 of 4 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 
 
@@ -739,3 +743,48 @@ def test_proxy_command_escapes_percent_for_openssh_tokens(mocker):
 
     assert "a%%h" in cmd
     assert "a%h" not in cmd.replace("a%%h", "")
+
+
+# --- --force flag -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "kills"),
+    [
+        (["--force"], 1),
+        (["--proxy-mode", "--force"], 1),
+        (["--force", "--", "true"], 1),
+        ([], 0),
+    ],
+    ids=["interactive", "proxy-mode", "cmd", "no-force"],
+)
+def test_force_kills_stale_sshd(mock_common_state, mocker, argv, kills):
+    """--force calls _killStaleSshd; without it, the helper is skipped."""
+    sess = _make_session()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.store.get.return_value = sess
+    mock_common_state.store.list.return_value = [sess]
+
+    killSshd = mocker.patch.object(ssh_module, "_killStaleSshd")
+    mocker.patch.object(ssh_module, "_run_interactive_ssh", return_value=0)
+    mocker.patch.object(ssh_module, "_run_proxy_bridge", return_value=0)
+    mocker.patch.object(ssh_module, "_run_remote_command", return_value=0)
+
+    result = runner.invoke(app, ["ssh", "-s", "s1", *argv])
+    assert result.exit_code == 0
+    assert killSshd.call_count == kills
+
+
+def test_kill_stale_sshd_body(mock_common_state, mocker):
+    """_killStaleSshd passes kernel_id and calls rt.stop()."""
+    sess = _make_session()
+    sess.kernel_id = "k123"
+    mockRt = MagicMock()
+    mockRt.execute_code.return_value = []
+    rtCls = mocker.patch("colab_cli.runtime.ColabRuntime", return_value=mockRt)
+
+    ssh_module._killStaleSshd(sess)
+
+    rtCls.assert_called_once_with(sess.url, sess.token, kernel_id="k123")
+    mockRt.execute_code.assert_called_once()
+    mockRt.stop.assert_called_once()
