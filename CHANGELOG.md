@@ -12,10 +12,11 @@ below corresponds to a tag of the same name.
 
 ## [0.8.0.5] - 2026-11-20
 
-Fixes for runtimes that were left running or hard to stop, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.
+Runtimes opened in the Colab web UI can be used and stopped from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.
 
 ### Added
 
+- **attach:** `colab attach --endpoint ID` uses a runtime opened elsewhere, such as in the Colab web UI, as a local session, so you can upload files to a notebook's runtime with `colab upload`, `colab ssh` or scp, or run code on it with `colab exec` (in the CLI's own kernel; `/content` is shared). The tray's card for such a runtime has a Connect button. (#20)
 - **stop:** `colab stop --endpoint ID` stops one runtime by the endpoint `colab sessions` lists, also one with no local session, such as a runtime opened in the Colab web UI. A local session's endpoint stops that session like `-s`; an unknown endpoint exits 1 (upstream issue #263). (#14)
 - **tray:** a runtime with no local session can be stopped from the panel: its card shows the endpoint instead of `?`, says it may be open in the Colab web UI or on another computer, and has a Stop button. Before, the card had no buttons. (#14)
 - **ssh:** `colab ssh --force` kills the runtime's stale SSH sessions before connecting, for when a dead client holds the slot and the server answers 429 (upstream #254). It works with `-L`, `-N`, `-- CMD` and `--proxy-mode`. (#18)
