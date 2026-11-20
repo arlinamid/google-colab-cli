@@ -25,9 +25,12 @@ transfer goes over the contents API or over ssh (scp), as chosen at the top.
 import codecs
 import json
 import os
+import subprocess
+import sys
+import time
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QDir, QMimeData, QProcess, QProcessEnvironment, Qt, QUrl
+from PySide6.QtCore import QDir, QMimeData, QProcess, QProcessEnvironment, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -38,6 +41,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTreeView,
@@ -159,11 +163,19 @@ class FileManager(QWidget):
         self.remote_dir = REMOTE_ROOT
         self.local_dir = start_dir or os.path.expanduser("~")
         self.active = "remote"
+        self.available = True
         self.setObjectName("window")
         self.setStyleSheet(WINDOW_QSS)
         self.setWindowTitle(t(lang, "files.title", session=session))
         self.resize(1100, 680)
         box = QVBoxLayout(self)
+
+        self.banner = QLabel(t(lang, "files.gone", session=session), wordWrap=True)
+        self.banner.setStyleSheet(
+            "background: #5c1d1d; color: #f6aea9; border: 1px solid #ea4335; border-radius: 6px; padding: 8px;"
+        )
+        self.banner.hide()
+        box.addWidget(self.banner)
 
         top = QHBoxLayout()
         top.addWidget(QLabel(t(lang, "files.via")))
@@ -174,10 +186,10 @@ class FileManager(QWidget):
         self.via.currentIndexChanged.connect(self._save_via)
         top.addWidget(self.via)
         top.addStretch()
-        refresh = QPushButton(t(lang, "log.refresh"))
-        refresh.setIcon(glyph_icon("refresh", "#e8eaed"))
-        refresh.clicked.connect(self.refresh_remote)
-        top.addWidget(refresh)
+        self.refresh_button = QPushButton(t(lang, "log.refresh"))
+        self.refresh_button.setIcon(glyph_icon("refresh", "#e8eaed"))
+        self.refresh_button.clicked.connect(self.refresh_remote)
+        top.addWidget(self.refresh_button)
         box.addLayout(top)
 
         split = QSplitter(Qt.Horizontal)
@@ -230,8 +242,22 @@ class FileManager(QWidget):
         fixed = QFontDatabase.systemFont(QFontDatabase.FixedFont)
         self.output.setFont(QFont(fixed.family(), 10))
         box.addWidget(self.output, 1)
+        progress_row = QHBoxLayout()
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(True)
+        self.progress.hide()
+        progress_row.addWidget(self.progress, 1)
+        self.cancel_button = QPushButton(t(lang, "files.cancel"), objectName="danger")
+        self.cancel_button.clicked.connect(self.cancel)
+        self.cancel_button.hide()
+        progress_row.addWidget(self.cancel_button)
+        box.addLayout(progress_row)
+        self.job_via = None
         self.status = QLabel(objectName="muted")
         box.addWidget(self.status)
+        self.job_label, self.job_start, self.job_progress, self._line_buf = "", 0.0, None, ""
+        self.ticker = QTimer(self)
+        self.ticker.timeout.connect(self._tick)
 
         for key, slot in ((Qt.Key_F5, self.copy_selected), (Qt.Key_F7, self.make_folder),
                           (Qt.Key_F8, self.delete_selected)):
@@ -290,7 +316,37 @@ class FileManager(QWidget):
 
     def submit(self, argv: List[str], label: str, done: Optional[Callable[[int, str], None]] = None,
                stdin: Optional[str] = None) -> None:
-        self.run(argv, stdin, label, done or (lambda code, out: None))
+        if not self.available:
+            self.status.setText(t(self.lang, "files.gone_short"))
+            return
+        done = done or (lambda code, out: None)
+        missing = f"Session '{self.session}' not found"
+
+        def checked(code: int, out: str) -> None:
+            done(code, out)
+            if code and missing in out:
+                self.set_available(False)
+
+        self.run(argv, stdin, label, checked)
+
+    def set_available(self, available: bool) -> None:
+        """Called by the tray on each refresh, and when a command finds no session.
+
+        Without the runtime the remote side is read-only history: the banner
+        says so, waiting commands are dropped, and only the local pane works.
+        """
+        if available == self.available:
+            return
+        self.available = available
+        self.banner.setVisible(not available)
+        for widget in (self.remote, self.remote_path, self.command, self.via, self.refresh_button,
+                       self.buttons["files.upload"], self.buttons["files.download"]):
+            widget.setEnabled(available)
+        if not available:
+            self.queue.clear()
+            self.status.setText(t(self.lang, "files.gone_short"))
+        else:
+            self.refresh_remote()
 
     def _run_process(self, argv, stdin, label, done) -> None:
         self.queue.append((argv, stdin, label, done))
@@ -300,10 +356,11 @@ class FileManager(QWidget):
     def _next(self) -> None:
         if not self.queue:
             self.proc = None
-            self.status.setText(t(self.lang, "files.idle"))
+            self._all_done()
             return
         argv, stdin, label, done = self.queue.pop(0)
-        self.status.setText(t(self.lang, "files.running", what=label, left=len(self.queue)))
+        self.job_via = argv[argv.index("--via") + 1] if "--via" in argv else None
+        self._job_started(label)
         proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         for k, v in (("NO_COLOR", "1"), ("PYTHONIOENCODING", "utf-8"), ("TERM", "dumb")):
@@ -312,7 +369,13 @@ class FileManager(QWidget):
         proc.setProcessChannelMode(QProcess.MergedChannels)
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         chunks: List[str] = []
-        proc.readyReadStandardOutput.connect(lambda: chunks.append(decoder.decode(bytes(proc.readAllStandardOutput()))))
+
+        def read():
+            text = decoder.decode(bytes(proc.readAllStandardOutput()))
+            chunks.append(text)
+            self._feed_progress(text)
+
+        proc.readyReadStandardOutput.connect(read)
 
         def finished(code, _status=None):
             chunks.append(decoder.decode(b"", final=True))
@@ -329,6 +392,77 @@ class FileManager(QWidget):
         if stdin is not None:
             proc.write(stdin.encode("utf-8"))
         proc.closeWriteChannel()
+
+    # --- progress: a bar, the file being copied, the time so far ---
+
+    def _job_started(self, label: str) -> None:
+        self.job_label, self.job_start, self.job_progress, self._line_buf = label, time.monotonic(), None, ""
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.cancel_button.show()
+        self._tick()
+        self.ticker.start(1000)
+
+    def _feed_progress(self, text: str) -> None:
+        self._line_buf += text
+        *lines, self._line_buf = self._line_buf.split("\n")
+        for line in lines:
+            parsed = file_ops.parse_progress(line)
+            if parsed:
+                self._set_progress(*parsed)
+
+    def _set_progress(self, done: int, total: Optional[int], path: str) -> None:
+        self.job_progress = (done, total, path)
+        if total:
+            self.progress.setRange(0, total)
+            self.progress.setValue(done)
+        self._tick()
+
+    def _tick(self) -> None:
+        seconds = int(time.monotonic() - self.job_start)
+        parts = [t(self.lang, "files.now", what=self.job_label)]
+        if self.job_progress:
+            done, total, path = self.job_progress
+            parts.append(t(self.lang, "files.of_total", done=done, total=total) if total
+                         else t(self.lang, "files.count", done=done))
+            parts.append(path)
+        parts.append(f"{seconds // 60}:{seconds % 60:02d}")
+        if self.queue:
+            parts.append(t(self.lang, "files.waiting", left=len(self.queue)))
+        self.status.setText(" · ".join(parts))
+
+    def cancel(self) -> None:
+        """Stop the running command and drop the waiting ones."""
+        dropped = len(self.queue)
+        self.queue.clear()
+        running = self.proc is not None and self.proc.state() != QProcess.NotRunning
+        if running:
+            self.log(t(self.lang, "files.cancelled", what=self.job_label, dropped=dropped))
+            if self.job_via == "ssh":
+                self.log(t(self.lang, "files.cancelled_ssh"))
+            elif self.job_via == "contents":
+                self.log(t(self.lang, "files.cancelled_contents"))
+            self._stop_process_tree(self.proc)
+        elif dropped:
+            self.log(t(self.lang, "files.cancelled", what="", dropped=dropped))
+
+    @staticmethod
+    def _stop_process_tree(proc: QProcess) -> None:
+        """Stop the CLI and what it started (scp): killing only the CLI leaves
+        scp copying on Windows, where children outlive their parent."""
+        pid = proc.processId()
+        if sys.platform == "win32" and pid:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            return
+        proc.terminate()
+        QTimer.singleShot(5000, lambda: proc.state() != QProcess.NotRunning and proc.kill())
+
+    def _all_done(self) -> None:
+        self.ticker.stop()
+        self.progress.hide()
+        self.cancel_button.hide()
+        self.status.setText(t(self.lang, "files.idle" if self.available else "files.gone_short"))
 
     def log(self, text: str) -> None:
         self.output.appendPlainText(text.rstrip("\n"))
@@ -418,18 +552,31 @@ class FileManager(QWidget):
         for path in paths:
             argv = file_ops.copy_argv(self.session, path, target, upload=True, is_dir=os.path.isdir(path), via=via)
             self.submit(argv, t(self.lang, "files.uploading", name=os.path.basename(path.rstrip("/\\"))),
-                        self._after_transfer)
+                        self._transfer_done(argv[-1], via))
 
     def download(self, entries: List[dict], target: str) -> None:
         via = self.via.currentData()
         for entry in entries:
             argv = file_ops.copy_argv(self.session, entry["path"], target, upload=False, is_dir=entry["dir"], via=via)
             self.submit(argv, t(self.lang, "files.downloading", name=entry["path"].rsplit("/", 1)[-1]),
-                        self._after_transfer)
+                        self._transfer_done(argv[-1], via))
+
+    def _transfer_done(self, target: str, via: str) -> Callable[[int, str], None]:
+        """scp writes as it goes: after a failure the target may be cut short.
+
+        The contents API writes a file whole or not at all, so only files
+        already copied stay; nothing needs saying then.
+        """
+        def done(code: int, out: str) -> None:
+            self._after_transfer(code, out)
+            if code and via == "ssh":
+                self.log(t(self.lang, "files.partial", path=target))
+        return done
 
     def _after_transfer(self, code: int, out: str) -> None:
         self.log(out)
-        self.refresh_remote()
+        if self.available:
+            self.refresh_remote()
 
     def upload_selected(self) -> None:
         paths = self.local_selection()

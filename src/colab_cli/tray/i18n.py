@@ -525,3 +525,37 @@ STRINGS["hu"].update({
     "files.select_local": "Jelölj ki fájlt vagy mappát a bal oldalon a feltöltéshez.",
     "files.select_remote": "Jelölj ki fájlt vagy mappát a jobb oldalon a letöltéshez.",
 })
+STRINGS["en"].update({
+    "files.gone": "The runtime {session} is gone (stopped, idled out, or the connection to it ended). Waiting commands were dropped; the left pane still works. This window comes back to life if the runtime does.",
+    "files.gone_short": "The runtime is gone: nothing can be copied to or from it.",
+    "files.partial": "scp stopped with an error: {path} may be cut short; check it or copy it again.",
+})
+STRINGS["hu"].update({
+    "files.gone": "A(z) {session} gép eltűnt (leállt, tétlenség miatt leállították, vagy megszakadt a kapcsolat). A várakozó műveletek törlődtek; a bal oldali panel továbbra is használható. Ha a gép visszajön, az ablak újra működik.",
+    "files.gone_short": "A gép eltűnt: nem lehet rá vagy róla másolni.",
+    "files.partial": "Az scp hibával állt le: a(z) {path} csonka lehet; ellenőrizd vagy másold újra.",
+})
+STRINGS["en"].update({
+    "files.now": "Running: {what}",
+    "files.of_total": "{done} / {total} files",
+    "files.count": "{done} files done",
+    "files.waiting": "{left} waiting",
+})
+STRINGS["hu"].update({
+    "files.now": "Fut: {what}",
+    "files.of_total": "{done} / {total} fájl",
+    "files.count": "{done} fájl kész",
+    "files.waiting": "még {left} vár",
+})
+STRINGS["en"].update({
+    "files.cancel": "Cancel",
+    "files.cancelled": "Cancelled: {what} ({dropped} waiting dropped).",
+    "files.cancelled_contents": "Files copied before the cancel stay; the file being copied was not written.",
+    "files.cancelled_ssh": "The file scp was copying may be cut short; check it or copy it again.",
+})
+STRINGS["hu"].update({
+    "files.cancel": "Megszakítás",
+    "files.cancelled": "Megszakítva: {what} ({dropped} várakozó törölve).",
+    "files.cancelled_contents": "A megszakítás előtt átment fájlok megmaradnak; az éppen másolt fájl nem íródott ki.",
+    "files.cancelled_ssh": "Az scp által éppen másolt fájl csonka lehet; ellenőrizd vagy másold újra.",
+})

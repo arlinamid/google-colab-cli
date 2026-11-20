@@ -29,7 +29,9 @@ def test_ls_argv():
 
 def test_copy_argv_upload_a_folder_into_the_remote_folder():
     argv = f.copy_argv("s1", os.path.join("C:", "work", "data"), "content", upload=True, is_dir=True, via="contents")
-    assert argv == ["upload", "-s", "s1", "-r", "--via", "contents", os.path.join("C:", "work", "data"), "content/data"]
+    assert argv == [
+        "upload", "-s", "s1", "-r", "--via", "contents", "--progress", os.path.join("C:", "work", "data"), "content/data",
+    ]
 
 
 def test_copy_argv_download_a_file_over_ssh(tmp_path):
@@ -79,3 +81,9 @@ def test_parse_listing_errors():
 @pytest.mark.parametrize("size,text", [(None, ""), (0, "0 B"), (999, "999 B"), (2048, "2.0 KB"), (5 * 1024**3, "5.0 GB")])
 def test_human_size(size, text):
     assert f.human_size(size) == text
+
+
+def test_parse_progress():
+    assert f.parse_progress("[colab] progress 3/10 content/d/sub/b.txt\n") == (3, 10, "content/d/sub/b.txt")
+    assert f.parse_progress("[colab] progress 7/? content/x") == (7, None, "content/x")
+    assert f.parse_progress("[colab] Uploaded 'x' to 'y'") is None

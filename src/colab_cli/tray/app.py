@@ -175,6 +175,11 @@ class TrayApp(QObject):
         self.busy = False
         prev, self.snapshot = self.snapshot, snap
         self._reap_children()
+        if snap.get("ok"):
+            local = {e["name"] for e in snap.get("sessions", []) if e.get("local")}
+            for window in self.windows:
+                if hasattr(window, "set_available") and getattr(window, "session", None):
+                    window.set_available(window.session in local)
         if self.settings.tray_notifications:
             for event in events(prev, snap, low_balance_hours=self.settings.tray_low_balance_hours):
                 self.notify(actions.notification(event, self.lang),

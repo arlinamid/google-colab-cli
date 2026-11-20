@@ -23,6 +23,7 @@ never talks to the runtime itself. Remote paths are contents-API paths
 import json
 import os
 import posixpath
+import re
 import shlex
 from typing import List, Optional, Tuple
 
@@ -50,7 +51,22 @@ def copy_argv(session: str, source: str, target_dir: str, *, upload: bool, is_di
     argv = ["upload" if upload else "download", "-s", session]
     if is_dir:
         argv.append("-r")
-    return argv + ["--via", via, source, target]
+    argv += ["--via", via]
+    if via == "contents":
+        argv.append("--progress")
+    return argv + [source, target]
+
+
+PROGRESS = re.compile(r"^\[colab\] progress (\d+)/(\d+|\?) (.*)$")
+
+
+def parse_progress(line: str) -> Optional[Tuple[int, Optional[int], str]]:
+    """A `--progress` line as (done, total or None, path); None for other lines."""
+    match = PROGRESS.match(line.strip())
+    if not match:
+        return None
+    total = match.group(2)
+    return int(match.group(1)), None if total == "?" else int(total), match.group(3)
 
 
 def mkdir_argv(session: str, path: str) -> List[str]:

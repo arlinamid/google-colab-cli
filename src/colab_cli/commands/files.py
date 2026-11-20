@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import typer
 from typing import Optional
@@ -171,6 +172,10 @@ def upload(
         Optional[str],
         typer.Option("--identity", "-i", help="With --via ssh: the SSH key, as for `colab ssh`."),
     ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress", help="Print a line per copied file: [colab] progress DONE/TOTAL PATH."),
+    ] = False,
 ):
     """Upload a file or directory to a session"""
     from colab_cli.common import state
@@ -194,7 +199,7 @@ def upload(
     contents = ContentsClient(s)
     try:
         if is_dir:
-            count = contents.upload_dir(local_path, remote_path)
+            count = contents.upload_dir(local_path, remote_path, **_progress_kwargs(progress))
             state.history.log_event(
                 name,
                 "file_operation",
@@ -211,6 +216,8 @@ def upload(
             )
         else:
             contents.upload(local_path, remote_path)
+            if progress:
+                _progress_printer(True)(1, 1, remote_path)
             state.history.log_event(
                 name,
                 "file_operation",
@@ -249,6 +256,10 @@ def download(
         Optional[str],
         typer.Option("--identity", "-i", help="With --via ssh: the SSH key, as for `colab ssh`."),
     ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress", help="Print a line per copied file: [colab] progress DONE/TOTAL PATH."),
+    ] = False,
 ):
     """Download a file or directory from a session"""
     from colab_cli.common import state
@@ -263,7 +274,7 @@ def download(
     contents = ContentsClient(s)
     try:
         if recursive:
-            count = contents.download_dir(remote_path, local_path)
+            count = contents.download_dir(remote_path, local_path, **_progress_kwargs(progress))
             state.history.log_event(
                 name,
                 "file_operation",
@@ -280,6 +291,8 @@ def download(
             )
         else:
             contents.download(remote_path, local_path)
+            if progress:
+                _progress_printer(True)(1, 1, remote_path)
             state.history.log_event(
                 name,
                 "file_operation",
@@ -291,6 +304,22 @@ def download(
         raise typer.Exit(1)
     finally:
         contents.close()
+
+
+def _progress_printer(enabled: bool):
+    """With --progress, one line per file for the tray's file manager to read."""
+    if not enabled:
+        return None
+
+    def printer(done: int, total, path: str) -> None:
+        typer.echo(f"[colab] progress {done}/{total if total is not None else '?'} {path}")
+        sys.stdout.flush()
+
+    return printer
+
+
+def _progress_kwargs(enabled: bool) -> dict:
+    return {"on_file": _progress_printer(True)} if enabled else {}
 
 
 def _check_via(via: str) -> str:

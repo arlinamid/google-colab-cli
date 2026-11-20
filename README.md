@@ -273,6 +273,33 @@ Make the script executable (`chmod +x script.py`) and run it: `./script.py`. The
 
 ---
 
+### Tray File Manager
+
+`colab tray` shows a **Files** button on each runtime's card. It opens a two-pane window, like Total Commander: this computer on the left, the runtime's `/content` on the right.
+
+- **Copy:** drag and drop between the panes (or from Explorer), the **Upload / Download** buttons, or **F5**. **F7** new folder, **F8** delete (local files go to the recycle bin), **Enter** opens, **Backspace** goes up, the drive list switches drives.
+- **Transfer:** *Contents API* (no key needed) or *SSH / scp* (faster for big files; needs an SSH key without a passphrase: set `"ssh_identity": "~/.ssh/your_key"` in `~/.config/colab-cli/settings.json` if it is not `~/.ssh/id_ed25519`).
+- **Progress and Cancel:** a bar with files done / total and the time; Cancel stops the copy (files already copied stay; with scp the file being copied may be cut short).
+- **Command line:** the field at the bottom runs a command in the runtime's current folder.
+- If the runtime stops or the connection ends, a red banner says so and only the local pane stays usable.
+
+Details: [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md), section 5.
+
+### Runtimes Opened in the Colab Web UI
+
+A runtime you started in the browser shows as `[?]` in `colab sessions`. Attach it to use it from the CLI:
+
+```bash
+colab sessions                              # [?] m-s-usc1c3-29lht8cq7mkz8 | Hardware: CPU ...
+colab attach --endpoint m-s-usc1c3-29lht8cq7mkz8 -s web
+colab upload -s web data.csv /content/data.csv
+colab upload -s web -r --via ssh ./project /content/project
+colab ssh -s web -- ls -la /content
+colab stop -s web                           # stops it in the browser too
+```
+
+The CLI runs code in its own kernel, not the notebook's, but `/content` is shared, so uploaded files show in the notebook's Files panel at once. In the tray, the card of such a runtime has a **Connect** button that runs `colab attach` for you. To stop one without attaching: `colab stop --endpoint ID`.
+
 ## Deep Dive Documentation
 
 For comprehensive architectural overviews and deep-dives into specific CLI sub-systems, refer to the detailed documentation:

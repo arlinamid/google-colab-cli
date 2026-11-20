@@ -606,3 +606,15 @@ def test_a_card_without_wrapped_text_is_shown(tray):
     card = tray.panel.cards[0]
     assert card.sizeHint().height() > 50
     assert tray.panel.scroll.height() >= card.sizeHint().height()
+
+
+def test_snapshot_tells_open_file_managers_whether_their_runtime_is_there(tray):
+    window = MagicMock(session="train-t4")
+    gone = MagicMock(session="old")
+    tray.windows = [window, gone]
+    tray.on_snapshot(_snap([_entry("train-t4", None)]))
+    window.set_available.assert_called_with(True)
+    gone.set_available.assert_called_with(False)
+    window.set_available.reset_mock()
+    tray.on_snapshot(_snap([], ok=False))
+    window.set_available.assert_not_called()

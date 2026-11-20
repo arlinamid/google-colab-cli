@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: File manager: a progress bar with files done / total, the file and the time (`--progress` lines from `upload`/`download`), a Cancel button that stops the whole process tree (taskkill /T on Windows; SIGTERM elsewhere, on which scp is killed), a red banner and a read-only remote side when the runtime is gone (from the tray's refresh or a "Session not found"), and a note that a failed or cancelled scp may leave a cut-short file. Section 5 documents the window in full. Tested live: per-file progress on a 30-file upload, cancel over the contents API (7 of 60 files copied) and over scp (no scp left running), and the banner after `colab stop` with the window open.
 2026-11-20: A two-pane file manager (`tray/files.py`, argv in `tray/file_ops.py`), opened with the Files button of a local card, in the style of Total Commander: this computer on the left (drive list, Up), the runtime on the right from `content`. Copy by drag and drop, the Upload/Download buttons or F5; F7 new folder, F8 delete (a local file goes to the recycle bin, a remote one after a confirmation, `rm -r` for a folder), Enter or double-click opens, Backspace goes up. The line at the bottom runs a command in the runtime's folder (`colab ssh -- sh -c` over ssh, otherwise `colab exec` with Python on stdin, so no key is needed). Transfers go over the contents API or scp (`--via`), chosen at the top and saved as `tray_transfer`. Every action is a CLI subcommand run with QProcess, one at a time. Tested live: the window's runner uploaded, downloaded, ran a command and deleted on an attached web UI runtime; the user tried it from the tray.
 2026-11-20: The SSH and forward buttons use `ssh_identity` from `settings.json` (or `COLAB_CLI_SSH_IDENTITY`) when the key is not `~/.ssh/id_ed25519` / `id_ecdsa`; before, they ended with "no SSH public key found".
 2026-11-20: A card without a wrapped line (an idle runtime, such as one just attached with Connect) has no height for width, and Qt then returns about 1 px: the card list collapsed and the panel looked empty. Each card now takes the larger of its size hint and its height for the panel width.
@@ -256,14 +257,7 @@ run it on each binary.
   running job only the runtime can be stopped. A runtime with no local
   session is stopped by its endpoint (`colab stop --endpoint`), and the
   dialog says it may be open in the Colab web UI or on another computer.
-- **Files** opens a two-pane file manager for the runtime (`tray/files.py`):
-  this computer on the left (drive list, Up), the runtime on the right. Drag
-  and drop, the Upload/Download buttons or F5 copy; F7 makes a folder, F8
-  deletes (local files go to the recycle bin), Enter opens, Backspace goes up,
-  and the bottom line runs a command in the runtime's folder. The transfer
-  goes over the contents API (no key) or ssh/scp, saved as `tray_transfer`.
-  Every action is a CLI subcommand (`ls --json`, `upload`/`download -r --via`,
-  `mkdir`, `rm -r`, `ssh -- CMD` or `exec`), run one at a time.
+- **Files** opens a two-pane file manager for the runtime; see section 5.
 - **Log** opens a window that runs `colab job tail -n 200` (Follow adds
   `--follow` while the job runs) or, without a job, `colab log -n 200`, and
   shows the output as it comes; a help line says what it shows and where the
@@ -312,6 +306,102 @@ run it on each binary.
 - The fork's logo (`tray/colab.svg`, also the Windows binary's icon) is made
   from the Colab logo of homarr-labs/dashboard-icons (Apache-2.0): Colab's C
   and a teal ring. The Colab logo is a trademark of Google.
+
+## 5. The file manager (`tray/files.py`)
+
+The Files button of a local card opens a two-pane window for that runtime,
+in the style of Total Commander. `tray/file_ops.py` (no Qt) turns every
+action into argv for one of the CLI's own subcommands; the window runs them
+with QProcess, one at a time, and never talks to the runtime itself.
+
+### Layout
+
+| Part | What it is |
+|------|------------|
+| Banner (red, hidden normally) | Shown when the runtime is gone; see *When the runtime goes away*. |
+| Transfer | Contents API or SSH / scp; remembered as `tray_transfer` in `settings.json`. Refresh re-lists the remote folder. |
+| Left pane: *This computer* | Drive list (`QDir.drives()`), path field (type a path and press Enter), up button (parent). A `QFileSystemModel` view of the folder. |
+| Right pane: *Colab runtime* | Path field (contents-API path such as `content/data`), up button, and the listing from `colab ls --json`: name (folders end in `/`), size, modified. Starts at `content` (`/content`); `..` goes up, up to the runtime's root. |
+| Button bar | Upload, Download, F7 New folder, F8 Delete. |
+| Command line | `/content/...$` prompt and a field: runs a command in the remote folder. |
+| Output | What every command printed (transfers, errors, command output). |
+| Progress | A bar and a Cancel button while something runs; the status line under it. |
+
+### Keys and mouse
+
+| Action | How |
+|--------|-----|
+| Copy | Drag files or folders from one pane to the other (also from Explorer / Finder onto the right pane), the Upload / Download buttons, or F5 (copies the selection of the focused pane to the other pane's folder). Dropping on a folder copies into that folder. |
+| Open | Enter or double-click: a folder opens; a local file opens in its default program; a remote file does nothing. |
+| Up | Backspace, or the up button. |
+| New folder | F7 (in the focused pane). |
+| Delete | F8 (in the focused pane), after a confirmation. Local files go to the recycle bin (`QFile.moveToTrash`); remote ones are deleted for good (`colab rm`, `rm -r` for a folder). |
+| Command | Type in the line at the bottom and press Enter. |
+
+### Transfers
+
+| | Contents API (default) | SSH / scp |
+|---|---|---|
+| Runs | `colab upload/download [-r] --via contents --progress` | `colab upload/download [-r] --via ssh` (OpenSSH scp through `colab ssh --proxy-mode`) |
+| Needs | nothing | an SSH key: `ssh_identity` in `settings.json`, `COLAB_CLI_SSH_IDENTITY`, or `~/.ssh/id_ed25519` / `id_ecdsa`; no passphrase |
+| Speed | base64 inside JSON: fine for code and small data | faster for big files |
+| Progress | per file: "3 / 10 files, path, 0:12" and a filling bar (a download counts files without a total) | a moving bar and the time; no per-file data |
+| A failure or cancel | each file is written whole or not at all; files copied before stay | the file being copied may be cut short (the window says so) |
+| Limits | | a free CPU runtime takes one SSH connection at a time, so an open `colab ssh` makes scp fail with 429 |
+
+A folder is copied with its subfolders, empty ones included. Copying onto an
+existing remote folder of the same name merges into it over the contents
+API; scp then puts the folder inside it.
+
+### Command line
+
+The command runs in the remote folder shown in the prompt. Over SSH it is
+`colab ssh -s NAME -- sh -c "cd FOLDER && COMMAND"`; otherwise `colab exec`
+gets Python on stdin that runs the command with `subprocess.run(shell=True,
+cwd=FOLDER)` and prints its output and `[exit N]`, so it works without a key
+(in the CLI's kernel, not a notebook's). The listing is refreshed after it.
+If the connection ends, an ssh command ends with it; one run through
+`colab exec` may go on running on the runtime.
+
+### Cancel
+
+Cancel stops the running command and drops the waiting ones. The window stops
+the whole process tree: `taskkill /T /F` on Windows (a child such as scp
+outlives its parent there), SIGTERM elsewhere, on which `colab upload/download
+--via ssh` kills its scp. The output says what is left: over the contents API
+the files copied before the cancel stay and the file being copied was not
+written; over scp that file may be cut short.
+
+### When the runtime goes away
+
+On each refresh the tray tells every open file manager whether its runtime
+is still a local session (`set_available`); a command that prints
+`Session 'NAME' not found` does the same. Without the runtime the banner
+says so, waiting commands are dropped, and the remote side (listing, path,
+command line, transfer choice, Refresh, Upload, Download) is disabled; the
+left pane still works. If the runtime comes back (for example it was only
+missing from one refresh), the window lists it again.
+
+### What it leaves behind
+
+- On this computer: only what you download, in the folder you chose. Local
+  deletes go to the recycle bin. `tray_transfer` is saved in `settings.json`,
+  and every command adds its usual lines to
+  `~/.config/colab-cli/history/NAME.jsonl` and `colab.log`. The window writes
+  no temporary files.
+- On the runtime: only what you upload or create. A delete through the
+  contents API makes the Jupyter server create an empty `.ipynb_checkpoints`
+  folder in the parent folder (seen live); it is harmless and stays visible,
+  as hidden files are not hidden here.
+- Everything on the runtime is lost when it stops.
+
+### A runtime opened in the Colab web UI
+
+Such a runtime has no local session, so its card has Connect and Stop only.
+Connect runs `colab attach --endpoint ID`; the card then becomes a local one
+with Log, SSH, Files and Stop, and the file manager works on the notebook's
+`/content` (the CLI's commands run in their own kernel, not the notebook's).
+Stop on that card stops it in the web UI too.
 
 ## Testing
 

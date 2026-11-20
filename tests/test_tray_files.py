@@ -92,7 +92,8 @@ def test_f5_from_the_remote_pane_downloads_into_the_local_folder(fm, tmp_path):
     fm.remote.topLevelItem(2).setSelected(True)
     fm.copy_selected()
     assert fm.calls[-1]["argv"] == [
-        "download", "-s", "s1", "--via", "contents", "content/model.pt", os.path.join(str(tmp_path), "model.pt"),
+        "download", "-s", "s1", "--via", "contents", "--progress", "content/model.pt",
+        os.path.join(str(tmp_path), "model.pt"),
     ]
 
 
@@ -112,9 +113,9 @@ def test_dropping_local_files_on_the_remote_pane_uploads_them(fm, tmp_path):
     event = QDropEvent(QPointF(1, 1), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
     fm.remote.dropEvent(event)
     argv = fm.calls[-1]["argv"]
-    assert argv[:5] == ["upload", "-s", "s1", "--via", "contents"]
-    assert os.path.normpath(argv[5]) == os.path.normpath(str(tmp_path / "local.txt"))
-    assert argv[6] == "content/local.txt"
+    assert argv[:6] == ["upload", "-s", "s1", "--via", "contents", "--progress"]
+    assert os.path.normpath(argv[6]) == os.path.normpath(str(tmp_path / "local.txt"))
+    assert argv[7] == "content/local.txt"
 
 
 def test_dragging_remote_items_carries_their_paths_to_the_local_pane(fm, tmp_path):
@@ -203,3 +204,97 @@ def test_upload_and_download_buttons(fm, tmp_path):
     fm.buttons["files.download"].click()
     assert fm.calls[-1]["argv"][0] == "download"
     assert fm.calls[-1]["argv"][-1] == os.path.join(str(tmp_path), "model.pt")
+
+
+def test_a_gone_runtime_shows_a_banner_and_stops_remote_actions(fm, tmp_path):
+    _answer_listing(fm)
+    fm.queue.append((["upload"], None, "x", lambda c, o: None))
+    fm.set_available(False)
+    assert fm.banner.isVisibleTo(fm) and fm.queue == []
+    assert not fm.buttons["files.upload"].isEnabled() and not fm.buttons["files.download"].isEnabled()
+    assert not fm.remote.isEnabled() and not fm.command.isEnabled()
+    before = len(fm.calls)
+    fm.upload([str(tmp_path / "local.txt")], "content")
+    fm.refresh_remote()
+    assert len(fm.calls) == before
+    assert fm.local_view.isEnabled()
+
+    fm.set_available(True)
+    assert not fm.banner.isVisibleTo(fm) and fm.remote.isEnabled()
+    assert fm.calls[-1]["argv"] == ["ls", "-s", "s1", "--json", "content"]
+
+
+def test_a_missing_session_in_the_output_marks_the_runtime_gone(fm):
+    fm.calls[-1]["done"](1, "[colab] Session 's1' not found.\n")
+    assert fm.banner.isVisibleTo(fm)
+
+
+def test_a_failed_scp_warns_that_the_target_may_be_partial(fm, tmp_path):
+    _answer_listing(fm)
+    fm.via.setCurrentIndex(fm.via.findData("ssh"))
+    fm.download([{"path": "content/model.pt", "dir": False}], str(tmp_path))
+    fm.calls[-1]["done"](1, "[colab] Download over ssh failed (scp exit code 1).")
+    text = fm.output.toPlainText()
+    assert "csonka" in text and os.path.join(str(tmp_path), "model.pt") in text
+
+
+def test_a_failed_contents_transfer_does_not_claim_a_partial_file(fm, tmp_path):
+    _answer_listing(fm)
+    fm.download([{"path": "content/model.pt", "dir": False}], str(tmp_path))
+    fm.calls[-1]["done"](1, "[colab] Download failed: boom")
+    assert "csonka" not in fm.output.toPlainText()
+
+
+def test_progress_bar_shows_files_done_and_hides_when_all_done(fm):
+    fm._job_started("updir feltöltése")
+    assert fm.progress.isVisibleTo(fm) and fm.progress.maximum() == 0
+    fm._feed_progress("[colab] progress 3/1")
+    fm._feed_progress("0 content/updir/sub/b.txt\n[colab] Uploaded")
+    assert (fm.progress.maximum(), fm.progress.value()) == (10, 3)
+    assert "3 / 10 fájl" in fm.status.text() and "content/updir/sub/b.txt" in fm.status.text()
+    assert "updir feltöltése" in fm.status.text() and "0:0" in fm.status.text()
+    fm._all_done()
+    assert not fm.progress.isVisibleTo(fm) and fm.status.text() == "Kész."
+
+
+def test_progress_without_a_total_counts_files(fm):
+    fm._job_started("letöltés")
+    fm._feed_progress("[colab] progress 4/? content/x\n")
+    assert fm.progress.maximum() == 0 and "4 fájl kész" in fm.status.text()
+
+
+def test_cancel_kills_the_running_copy_and_drops_the_rest(fm, mocker):
+    from PySide6.QtCore import QProcess
+
+    fm._job_started("tree feltöltése")
+    assert fm.cancel_button.isVisibleTo(fm)
+    fm.queue[:] = [(["upload"], None, "a", None), (["upload"], None, "b", None)]
+    fm.proc = MagicMock()
+    fm.proc.state.return_value = QProcess.Running
+    fm.proc.processId.return_value = 4321
+    fm.job_via = "ssh"
+    run = mocker.patch.object(files_mod.subprocess, "run")
+    fm.cancel()
+    if files_mod.sys.platform == "win32":
+        assert run.call_args.args[0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    else:
+        fm.proc.terminate.assert_called_once()
+    assert fm.queue == []
+    text = fm.output.toPlainText()
+    assert "Megszakítva: tree feltöltése (2 várakozó törölve)" in text and "csonka" in text
+    fm.proc = None
+    fm._all_done()
+    assert not fm.cancel_button.isVisibleTo(fm)
+
+
+def test_cancel_over_contents_says_copied_files_stay(fm, mocker):
+    mocker.patch.object(files_mod.subprocess, "run")
+    from PySide6.QtCore import QProcess
+
+    fm._job_started("letöltés")
+    fm.proc = MagicMock()
+    fm.proc.state.return_value = QProcess.Running
+    fm.job_via = "contents"
+    fm.cancel()
+    assert "átment fájlok megmaradnak" in fm.output.toPlainText()
+    fm.proc = None

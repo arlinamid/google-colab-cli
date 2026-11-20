@@ -980,7 +980,23 @@ def scp_transfer(
         args.insert(1, "-r")
     remote = f"{_SSH_HOST}:/{target.lstrip('/') if upload else source.lstrip('/')}"
     args += [source, remote] if upload else [remote, target]
-    return subprocess.call(args)
+    proc = subprocess.Popen(args)
+
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        # Cancelled (the tray's file manager sends SIGTERM): scp must not
+        # go on copying in the background.
+        return 130
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:

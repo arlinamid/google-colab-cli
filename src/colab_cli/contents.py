@@ -169,7 +169,8 @@ class ContentsClient:
             self._ensure_dir(parent)
             self.mkdir(remote_path)
 
-    def upload_dir(self, local_dir: str, remote_dir: str) -> int:
+    def upload_dir(self, local_dir: str, remote_dir: str, on_file=None) -> int:
+        """Upload a tree; ``on_file(done, total, remote_path)`` after each file."""
         if not os.path.isdir(local_dir):
             raise NotADirectoryError(f"Not a directory: {local_dir}")
         base_remote = _normalize_remote_path(remote_dir)
@@ -179,6 +180,14 @@ class ContentsClient:
         def _raise_walk_error(err: OSError) -> None:
             raise err
 
+        total = None
+        if on_file is not None:
+            total = sum(
+                1
+                for root, dirs, files in os.walk(local_dir, followlinks=False)
+                for f in files
+                if not os.path.islink(os.path.join(root, f)) and os.path.isfile(os.path.join(root, f))
+            )
         count = 0
         for root, dirs, files in os.walk(
             local_dir, followlinks=False, onerror=_raise_walk_error
@@ -195,8 +204,11 @@ class ContentsClient:
             for f in files:
                 local_file = os.path.join(root, f)
                 if not os.path.islink(local_file) and os.path.isfile(local_file):
-                    self.upload(local_file, posixpath.join(current_remote, f))
+                    remote_file = posixpath.join(current_remote, f)
+                    self.upload(local_file, remote_file)
                     count += 1
+                    if on_file is not None:
+                        on_file(count, total, remote_file)
         return count
 
     def download(self, remote_path: str, local_path: str):
@@ -215,9 +227,13 @@ class ContentsClient:
         remote_path: str,
         local_path: str,
         *,
+        on_file=None,
         _depth: int = 0,
         _max_depth: int = 64,
+        _done=None,
     ) -> int:
+        """Download a tree; ``on_file(done, None, remote_path)`` after each file."""
+        _done = _done if _done is not None else [0]
         if _depth > _max_depth:
             raise RecursionError(
                 f"Maximum directory depth ({_max_depth}) exceeded while downloading {remote_path!r}"
@@ -258,12 +274,17 @@ class ContentsClient:
                 count += self.download_dir(
                     child_remote,
                     child_local,
+                    on_file=on_file,
                     _depth=_depth + 1,
                     _max_depth=_max_depth,
+                    _done=_done,
                 )
             else:
                 self.download(child_remote, child_local)
                 count += 1
+                _done[0] += 1
+                if on_file is not None:
+                    on_file(_done[0], None, child_remote)
         return count
 
     def read_text(self, remote_path: str) -> str:
