@@ -291,3 +291,18 @@ class ContentsClient:
 
     def rm(self, remote_path: str):
         self._request("DELETE", remote_path)
+
+    def rm_tree(self, remote_path: str) -> None:
+        """Delete a folder and everything in it, children first.
+
+        The contents API does not delete a folder that is not empty.
+        """
+        data = self.list_dir(remote_path)
+        if data.get("type") == "directory":
+            for item in data.get("content") or []:
+                child = posixpath.join(remote_path, _validate_entry_name(item.get("name")))
+                if item.get("type") == "directory":
+                    self.rm_tree(child)
+                else:
+                    self.rm(child)
+        self.rm(remote_path)
