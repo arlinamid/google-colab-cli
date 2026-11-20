@@ -142,6 +142,7 @@ class TrayApp(QObject):
         self.panel.open_clicked.connect(self.open_service)
         self.panel.stop_clicked.connect(self.ask_stop)
         self.panel.attach_clicked.connect(self.attach)
+        self.panel.files_clicked.connect(self.open_files)
         self.panel.profile_clicked.connect(self.start_profile)
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
@@ -174,6 +175,11 @@ class TrayApp(QObject):
         self.busy = False
         prev, self.snapshot = self.snapshot, snap
         self._reap_children()
+        if snap.get("ok"):
+            local = {e["name"] for e in snap.get("sessions", []) if e.get("local")}
+            for window in self.windows:
+                if hasattr(window, "set_available") and getattr(window, "session", None):
+                    window.set_available(window.session in local)
         if self.settings.tray_notifications:
             for event in events(prev, snap, low_balance_hours=self.settings.tray_low_balance_hours):
                 self.notify(actions.notification(event, self.lang),
@@ -448,6 +454,20 @@ class TrayApp(QObject):
                     child["proc"].terminate()
         self.run_cli(actions.stop_argv(card, choice))
         QTimer.singleShot(3000, self.refresh)
+
+    def open_files(self, card):
+        """The two-pane file manager for this runtime (tray/files.py)."""
+        from colab_cli.tray.files import FileManager
+
+        for w in self.windows:
+            if isinstance(w, FileManager) and w.session == card["name"] and w.isVisible():
+                w.raise_()
+                w.activateWindow()
+                return w
+        return self._show_window(FileManager(
+            card["name"], self.lang, colab_argv(self.state),
+            settings_store=getattr(self.state, "settings_store", None),
+        ))
 
     def attach(self, card):
         self.run_cli(actions.attach_argv(card))

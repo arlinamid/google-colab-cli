@@ -14,9 +14,11 @@
 
 import click
 import hashlib
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import typer
 from typing import Optional
@@ -33,6 +35,13 @@ def ls(
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
     path: Annotated[str, typer.Argument(help="Remote path to list")] = "content",
+    as_json: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="One JSON object: path and items (name, type, size, last_modified).",
+        ),
+    ] = False,
 ):
     """List files in a session"""
     from colab_cli.common import state
@@ -44,6 +53,9 @@ def ls(
     try:
         data = contents.list_dir(path)
         state.history.log_event(name, "file_operation", {"op": "ls", "path": path})
+        if as_json:
+            typer.echo(json.dumps(_listing(path, data)))
+            return
         if data.get("type") == "directory":
             items = data.get("content", [])
             for item in sorted(
@@ -53,6 +65,50 @@ def ls(
                 typer.echo(f"{item.get('name')}{suffix}")
         else:
             typer.echo(data.get("name"))
+    except Exception as e:
+        if as_json:
+            typer.echo(json.dumps({"path": path, "error": redact_secrets(str(e))}))
+        else:
+            typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
+        raise typer.Exit(1)
+    finally:
+        contents.close()
+
+
+def _listing(path: str, data: dict) -> dict:
+    """`ls --json`: folders first, then by name, as for the plain listing."""
+    if data.get("type") != "directory":
+        data = {"content": [data]}
+    items = [
+        {
+            "name": item.get("name"),
+            "type": item.get("type"),
+            "size": item.get("size"),
+            "last_modified": item.get("last_modified"),
+        }
+        for item in data.get("content") or []
+    ]
+    items.sort(key=lambda i: (i["type"] != "directory", i["name"] or ""))
+    return {"path": path, "items": items}
+
+
+def mkdir(
+    session: Annotated[
+        Optional[str], typer.Option("-s", "--session", help="Session name")
+    ] = None,
+    path: Annotated[str, typer.Argument(help="Remote folder to create")] = ...,
+):
+    """Create a remote folder"""
+    from colab_cli.common import state
+
+    name = state.resolve_session(session)
+    path = undo_msys_path(path)
+    s = state.get_session(name)
+    contents = ContentsClient(s)
+    try:
+        contents.mkdir(path)
+        state.history.log_event(name, "file_operation", {"op": "mkdir", "path": path})
+        typer.echo(f"[colab] Created {path}")
     except Exception as e:
         typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
@@ -65,8 +121,12 @@ def rm(
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
     path: Annotated[str, typer.Argument(help="Remote path to remove")] = ...,
+    recursive: Annotated[
+        bool,
+        typer.Option("-r", "--recursive", help="Remove a folder and everything in it"),
+    ] = False,
 ):
-    """Remove a remote file"""
+    """Remove a remote file, or a folder with -r"""
     from colab_cli.common import state
 
     name = state.resolve_session(session)
@@ -74,8 +134,13 @@ def rm(
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
-        contents.rm(path)
-        state.history.log_event(name, "file_operation", {"op": "rm", "path": path})
+        if recursive:
+            contents.rm_tree(path)
+        else:
+            contents.rm(path)
+        state.history.log_event(
+            name, "file_operation", {"op": "rm", "path": path, "recursive": recursive}
+        )
         typer.echo(f"[colab] Deleted {path}")
     except Exception as e:
         typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
@@ -96,6 +161,21 @@ def upload(
         bool,
         typer.Option("-r", "--recursive", help="Recursively upload a directory"),
     ] = False,
+    via: Annotated[
+        str,
+        typer.Option(
+            "--via",
+            help="contents (Jupyter contents API, the default) or ssh (scp; needs an SSH key).",
+        ),
+    ] = "contents",
+    identity: Annotated[
+        Optional[str],
+        typer.Option("--identity", "-i", help="With --via ssh: the SSH key, as for `colab ssh`."),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress", help="Print a line per copied file: [colab] progress DONE/TOTAL PATH."),
+    ] = False,
 ):
     """Upload a file or directory to a session"""
     from colab_cli.common import state
@@ -113,10 +193,13 @@ def upload(
         label = "path" if recursive else "file"
         typer.echo(f"[colab] Local {label} '{local_path}' not found.")
         raise typer.Exit(1)
+    if _check_via(via) == "ssh":
+        _transfer_via_ssh(state, name, s, identity, local_path, remote_path, upload=True, recursive=is_dir)
+        return
     contents = ContentsClient(s)
     try:
         if is_dir:
-            count = contents.upload_dir(local_path, remote_path)
+            count = contents.upload_dir(local_path, remote_path, **_progress_kwargs(progress))
             state.history.log_event(
                 name,
                 "file_operation",
@@ -133,6 +216,8 @@ def upload(
             )
         else:
             contents.upload(local_path, remote_path)
+            if progress:
+                _progress_printer(True)(1, 1, remote_path)
             state.history.log_event(
                 name,
                 "file_operation",
@@ -160,17 +245,36 @@ def download(
         bool,
         typer.Option("-r", "--recursive", help="Recursively download a directory"),
     ] = False,
+    via: Annotated[
+        str,
+        typer.Option(
+            "--via",
+            help="contents (Jupyter contents API, the default) or ssh (scp; needs an SSH key).",
+        ),
+    ] = "contents",
+    identity: Annotated[
+        Optional[str],
+        typer.Option("--identity", "-i", help="With --via ssh: the SSH key, as for `colab ssh`."),
+    ] = None,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress", help="Print a line per copied file: [colab] progress DONE/TOTAL PATH."),
+    ] = False,
 ):
     """Download a file or directory from a session"""
     from colab_cli.common import state
 
+    _check_via(via)
     name = state.resolve_session(session)
     remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
+    if via == "ssh":
+        _transfer_via_ssh(state, name, s, identity, remote_path, local_path, upload=False, recursive=recursive)
+        return
     contents = ContentsClient(s)
     try:
         if recursive:
-            count = contents.download_dir(remote_path, local_path)
+            count = contents.download_dir(remote_path, local_path, **_progress_kwargs(progress))
             state.history.log_event(
                 name,
                 "file_operation",
@@ -187,6 +291,8 @@ def download(
             )
         else:
             contents.download(remote_path, local_path)
+            if progress:
+                _progress_printer(True)(1, 1, remote_path)
             state.history.log_event(
                 name,
                 "file_operation",
@@ -198,6 +304,46 @@ def download(
         raise typer.Exit(1)
     finally:
         contents.close()
+
+
+def _progress_printer(enabled: bool):
+    """With --progress, one line per file for the tray's file manager to read."""
+    if not enabled:
+        return None
+
+    def printer(done: int, total, path: str) -> None:
+        typer.echo(f"[colab] progress {done}/{total if total is not None else '?'} {path}")
+        sys.stdout.flush()
+
+    return printer
+
+
+def _progress_kwargs(enabled: bool) -> dict:
+    return {"on_file": _progress_printer(True)} if enabled else {}
+
+
+def _check_via(via: str) -> str:
+    if via not in ("contents", "ssh"):
+        typer.echo(f"[colab] --via must be contents or ssh, not {via!r}.", err=True)
+        raise typer.Exit(2)
+    return via
+
+
+def _transfer_via_ssh(state, name, s, identity, source, target, *, upload, recursive) -> None:
+    """scp through the session's SSH bridge; exits with scp's code on failure."""
+    from colab_cli.commands.ssh import scp_transfer
+
+    code = scp_transfer(s, identity, source, target, upload=upload, recursive=recursive)
+    op = "upload" if upload else "download"
+    state.history.log_event(
+        name,
+        "file_operation",
+        {"op": op, "source": source, "target": target, "via": "ssh", "recursive": recursive, "exit_code": code},
+    )
+    if code:
+        typer.echo(f"[colab] {op.capitalize()} over ssh failed (scp exit code {code}).", err=True)
+        raise typer.Exit(code)
+    typer.echo(f"[colab] {'Uploaded' if upload else 'Downloaded'} '{source}' to '{target}' over ssh")
 
 
 def _launch_editor(path: str) -> None:
@@ -300,6 +446,7 @@ def edit(
 def register(app: typer.Typer):
     app.command()(ls)
     app.command()(rm)
+    app.command()(mkdir)
     app.command()(upload)
     app.command()(download)
     app.command()(edit)

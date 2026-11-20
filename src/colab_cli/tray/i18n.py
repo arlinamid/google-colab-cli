@@ -453,3 +453,109 @@ STRINGS["hu"].update({
     "log.help_session": "Amit ez a CLI a(z) {name} gépen futtatott: parancsok, kód és kimenetek a helyi előzményekből (a legújabb alul). Egy szerver saját naplója a gépen van, pl. colab ssh -s {name} -- tail -f /content/server.log",
     "log.ended": "[vége, kilépési kód: {code}]",
 })
+STRINGS["en"].update({
+    "files": "Files",
+    "files.title": "Files – {session}",
+    "files.local": "This computer",
+    "files.remote": "Colab runtime: {session}",
+    "files.via": "Transfer:",
+    "files.via_contents": "Contents API (no key needed)",
+    "files.via_ssh": "SSH / scp (faster for big files, needs an SSH key)",
+    "files.name": "Name",
+    "files.size": "Size",
+    "files.modified": "Modified",
+    "files.keys": "Drag between the panes or F5 Copy · F7 New folder · F8 Delete · Enter Open · Backspace Up · the line below runs a command in the runtime's folder",
+    "files.command_hint": "Command to run in this folder on the runtime, e.g. ls -la",
+    "files.idle": "Ready.",
+    "files.running": "Running: {what} ({left} waiting)",
+    "files.listing": "listing {path}",
+    "files.uploading": "uploading {name}",
+    "files.downloading": "downloading {name}",
+    "files.deleting": "deleting {name}",
+    "files.mkdir_title": "New folder",
+    "files.mkdir_prompt": "Name of the new folder:",
+    "files.delete_title": "Delete",
+    "files.delete_local": "Move to the recycle bin: {names}?",
+    "files.delete_remote": "Delete from the runtime, for good: {names}?",
+    "files.trash_failed": "Could not move to the recycle bin: {path}",
+    "files.no_folder": "Not a folder: {path}",
+})
+STRINGS["hu"].update({
+    "files": "Fájlok",
+    "files.title": "Fájlok – {session}",
+    "files.local": "Ez a gép",
+    "files.remote": "Colab-gép: {session}",
+    "files.via": "Átvitel:",
+    "files.via_contents": "Contents API (nem kell kulcs)",
+    "files.via_ssh": "SSH / scp (nagy fájlokra gyorsabb, SSH-kulcs kell)",
+    "files.name": "Név",
+    "files.size": "Méret",
+    "files.modified": "Módosítva",
+    "files.keys": "Húzd át a fájlokat a panelek között, vagy F5 Másolás · F7 Új mappa · F8 Törlés · Enter Megnyitás · Backspace Fel · a lenti sor parancsot futtat a gép mappájában",
+    "files.command_hint": "Parancs a gépen, ebben a mappában, pl. ls -la",
+    "files.idle": "Kész.",
+    "files.running": "Fut: {what} (még {left} vár)",
+    "files.listing": "{path} listázása",
+    "files.uploading": "{name} feltöltése",
+    "files.downloading": "{name} letöltése",
+    "files.deleting": "{name} törlése",
+    "files.mkdir_title": "Új mappa",
+    "files.mkdir_prompt": "Az új mappa neve:",
+    "files.delete_title": "Törlés",
+    "files.delete_local": "Lomtárba helyezed: {names}?",
+    "files.delete_remote": "Végleg törlöd a gépről: {names}?",
+    "files.trash_failed": "Nem sikerült a lomtárba tenni: {path}",
+    "files.no_folder": "Nem mappa: {path}",
+})
+STRINGS["en"].update({"files.drive": "Drive", "files.up": "Up one folder (Backspace)"})
+STRINGS["hu"].update({"files.drive": "Meghajtó", "files.up": "Egy mappával feljebb (Backspace)"})
+STRINGS["en"].update({
+    "files.upload": "Upload  ➜",
+    "files.download": "⬅  Download",
+    "files.mkdir": "F7 New folder",
+    "files.delete": "F8 Delete",
+    "files.select_local": "Select files or folders on the left to upload.",
+    "files.select_remote": "Select files or folders on the right to download.",
+})
+STRINGS["hu"].update({
+    "files.upload": "Feltöltés  ➜",
+    "files.download": "⬅  Letöltés",
+    "files.mkdir": "F7 Új mappa",
+    "files.delete": "F8 Törlés",
+    "files.select_local": "Jelölj ki fájlt vagy mappát a bal oldalon a feltöltéshez.",
+    "files.select_remote": "Jelölj ki fájlt vagy mappát a jobb oldalon a letöltéshez.",
+})
+STRINGS["en"].update({
+    "files.gone": "The runtime {session} is gone (stopped, idled out, or the connection to it ended). Waiting commands were dropped; the left pane still works. This window comes back to life if the runtime does.",
+    "files.gone_short": "The runtime is gone: nothing can be copied to or from it.",
+    "files.partial": "scp stopped with an error: {path} may be cut short; check it or copy it again.",
+})
+STRINGS["hu"].update({
+    "files.gone": "A(z) {session} gép eltűnt (leállt, tétlenség miatt leállították, vagy megszakadt a kapcsolat). A várakozó műveletek törlődtek; a bal oldali panel továbbra is használható. Ha a gép visszajön, az ablak újra működik.",
+    "files.gone_short": "A gép eltűnt: nem lehet rá vagy róla másolni.",
+    "files.partial": "Az scp hibával állt le: a(z) {path} csonka lehet; ellenőrizd vagy másold újra.",
+})
+STRINGS["en"].update({
+    "files.now": "Running: {what}",
+    "files.of_total": "{done} / {total} files",
+    "files.count": "{done} files done",
+    "files.waiting": "{left} waiting",
+})
+STRINGS["hu"].update({
+    "files.now": "Fut: {what}",
+    "files.of_total": "{done} / {total} fájl",
+    "files.count": "{done} fájl kész",
+    "files.waiting": "még {left} vár",
+})
+STRINGS["en"].update({
+    "files.cancel": "Cancel",
+    "files.cancelled": "Cancelled: {what} ({dropped} waiting dropped).",
+    "files.cancelled_contents": "Files copied before the cancel stay; the file being copied was not written.",
+    "files.cancelled_ssh": "The file scp was copying may be cut short; check it or copy it again.",
+})
+STRINGS["hu"].update({
+    "files.cancel": "Megszakítás",
+    "files.cancelled": "Megszakítva: {what} ({dropped} várakozó törölve).",
+    "files.cancelled_contents": "A megszakítás előtt átment fájlok megmaradnak; az éppen másolt fájl nem íródott ki.",
+    "files.cancelled_ssh": "Az scp által éppen másolt fájl csonka lehet; ellenőrizd vagy másold újra.",
+})
