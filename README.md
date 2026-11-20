@@ -135,10 +135,11 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### File Operations
 | Command | Description |
 | --- | --- |
-| `colab ls [-s NAME] [PATH]` | List remote files on the VM |
-| `colab upload [-s NAME] [-r] LOCAL REMOTE` | Upload a local file or directory (`-r`) to the VM filesystem |
-| `colab download [-s NAME] [-r] REMOTE LOCAL` | Download a remote file or directory (`-r`) from the VM filesystem |
-| `colab rm [-s NAME] PATH` | Delete a remote file on the VM filesystem |
+| `colab ls [-s NAME] [--json] [PATH]` | List remote files on the VM (`--json`: name, type, size, modified) |
+| `colab upload [-s NAME] [-r] [--via contents\|ssh] LOCAL REMOTE` | Upload a local file or directory (`-r`) to the VM filesystem; `--via ssh` copies with scp |
+| `colab download [-s NAME] [-r] [--via contents\|ssh] REMOTE LOCAL` | Download a remote file or directory (`-r`) from the VM filesystem; `--via ssh` copies with scp |
+| `colab mkdir [-s NAME] PATH` | Create a remote folder |
+| `colab rm [-s NAME] [-r] PATH` | Delete a remote file, or a folder with everything in it (`-r`) |
 | `colab edit [-s NAME] PATH` | Edit a remote file in-place using your local `$EDITOR` |
 
 ### Automation & Utilities

@@ -139,6 +139,7 @@ class Panel(QWidget):
     open_clicked = Signal(dict)
     stop_clicked = Signal(dict)
     attach_clicked = Signal(dict)
+    files_clicked = Signal(dict)
     profile_clicked = Signal(str)
     refresh_clicked = Signal()
     settings_clicked = Signal()
@@ -388,7 +389,8 @@ class Panel(QWidget):
             b.setIcon(glyph_icon("open", TEXT))
             b.clicked.connect(lambda _=False, c=card: self.attach_clicked.emit(c))
             buttons.addWidget(b)
-        for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked)):
+        for key, glyph, signal in (("log", "log", self.log_clicked), ("ssh", "terminal", self.ssh_clicked),
+                                   ("files", "folder", self.files_clicked)):
             if not card["local"]:
                 break
             b = QPushButton(t(lang, key), objectName="action")

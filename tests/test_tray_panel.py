@@ -115,7 +115,7 @@ def test_one_card_as_in_the_design(tray):
     assert "2 / 5 epoch · kb. 12 perc hátra" in texts
     assert tray.panel.cards[0].findChildren(QProgressBar)[0].value() == 450
     buttons = [b.text() for b in tray.panel.cards[0].findChildren(QPushButton)]
-    assert buttons == ["Napló", "SSH", "Leállítás"]
+    assert buttons == ["Napló", "SSH", "Fájlok", "Leállítás"]
     assert tray.panel.count_badge.text() == "1 aktív"
     assert tray.panel.status_text.text() == "Kapcsolódva"
     assert "Becsült hátralévő idő" in tray.panel.cu_estimate.text()
@@ -228,7 +228,7 @@ def test_start_profile_after_confirmation(tray, tmp_path, mocker):
     # The running kernel profile is a service with an Open button.
     _render(tray, [_entry("ui", None, profile="ui")])
     assert [b.text() for b in tray.panel.cards[0].findChildren(QPushButton)] == [
-        "Napló", "SSH", "Megnyitás", "Leállítás"]
+        "Napló", "SSH", "Fájlok", "Megnyitás", "Leállítás"]
 
 
 def test_declined_profile_does_not_start(tray, tmp_path, mocker):
@@ -310,7 +310,7 @@ def test_a_forwarded_runtime_gets_an_open_button(tray, mocker):
     view = _render(tray, [entry])
 
     card = tray.panel.cards[0]
-    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Megnyitás", "Leállítás"]
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Fájlok", "Megnyitás", "Leállítás"]
     assert "továbbítás: 8188" in [w.text() for w in card.findChildren(QLabel)]
     tray.open_service(view["cards"][0]["card"])
     opened.assert_called_once_with("http://127.0.0.1:8188")
@@ -391,7 +391,7 @@ def test_a_started_profile_shows_at_once_and_cannot_start_twice(tray, tmp_path, 
     _log(tray, "train", "[colab] Session READY.\n[colab] Started job j-1 (pid 7) on 'train-1113-180000'.\n")
     _render(tray, [_entry("train-1113-180000", _job())])
     [card] = tray.panel.cards
-    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Leállítás"]
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Fájlok", "Leállítás"]
 
     # The run ended: the profile can be started again.
     tray.popen.return_value.poll.return_value = 0
@@ -416,7 +416,7 @@ def test_a_kernel_profile_shows_its_setup_and_refreshes_sooner(tray, tmp_path, m
     texts = [w.text() for w in card.findChildren(QLabel)]
     assert "NVIDIA T4 · Indul" in texts
     assert any(x.endswith("› Telepítés kész.") for x in texts)
-    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Leállítás"]
+    assert [b.text() for b in card.findChildren(QPushButton)] == ["Napló", "SSH", "Fájlok", "Leállítás"]
 
     # Started (the script finished): a service again, and no faster refresh.
     _log(tray, "ui", "[colab] Script finished on 'ui'.\n")

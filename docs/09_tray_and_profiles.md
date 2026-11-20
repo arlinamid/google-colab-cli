@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: A two-pane file manager (`tray/files.py`, argv in `tray/file_ops.py`), opened with the Files button of a local card, in the style of Total Commander: this computer on the left (drive list, Up), the runtime on the right from `content`. Copy by drag and drop, the Upload/Download buttons or F5; F7 new folder, F8 delete (a local file goes to the recycle bin, a remote one after a confirmation, `rm -r` for a folder), Enter or double-click opens, Backspace goes up. The line at the bottom runs a command in the runtime's folder (`colab ssh -- sh -c` over ssh, otherwise `colab exec` with Python on stdin, so no key is needed). Transfers go over the contents API or scp (`--via`), chosen at the top and saved as `tray_transfer`. Every action is a CLI subcommand run with QProcess, one at a time. Tested live: the window's runner uploaded, downloaded, ran a command and deleted on an attached web UI runtime; the user tried it from the tray.
 2026-11-20: The SSH and forward buttons use `ssh_identity` from `settings.json` (or `COLAB_CLI_SSH_IDENTITY`) when the key is not `~/.ssh/id_ed25519` / `id_ecdsa`; before, they ended with "no SSH public key found".
 2026-11-20: A card without a wrapped line (an idle runtime, such as one just attached with Connect) has no height for width, and Qt then returns about 1 px: the card list collapsed and the panel looked empty. Each card now takes the larger of its size hint and its height for the panel width.
 2026-11-20: The card of a runtime with no local session also has a Connect button, which runs `colab attach --endpoint <id>`; the runtime then becomes a normal card with Log and SSH.
@@ -255,6 +256,14 @@ run it on each binary.
   running job only the runtime can be stopped. A runtime with no local
   session is stopped by its endpoint (`colab stop --endpoint`), and the
   dialog says it may be open in the Colab web UI or on another computer.
+- **Files** opens a two-pane file manager for the runtime (`tray/files.py`):
+  this computer on the left (drive list, Up), the runtime on the right. Drag
+  and drop, the Upload/Download buttons or F5 copy; F7 makes a folder, F8
+  deletes (local files go to the recycle bin), Enter opens, Backspace goes up,
+  and the bottom line runs a command in the runtime's folder. The transfer
+  goes over the contents API (no key) or ssh/scp, saved as `tray_transfer`.
+  Every action is a CLI subcommand (`ls --json`, `upload`/`download -r --via`,
+  `mkdir`, `rm -r`, `ssh -- CMD` or `exec`), run one at a time.
 - **Log** opens a window that runs `colab job tail -n 200` (Follow adds
   `--follow` while the job runs) or, without a job, `colab log -n 200`, and
   shows the output as it comes; a help line says what it shows and where the

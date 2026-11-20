@@ -142,6 +142,7 @@ class TrayApp(QObject):
         self.panel.open_clicked.connect(self.open_service)
         self.panel.stop_clicked.connect(self.ask_stop)
         self.panel.attach_clicked.connect(self.attach)
+        self.panel.files_clicked.connect(self.open_files)
         self.panel.profile_clicked.connect(self.start_profile)
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
@@ -448,6 +449,20 @@ class TrayApp(QObject):
                     child["proc"].terminate()
         self.run_cli(actions.stop_argv(card, choice))
         QTimer.singleShot(3000, self.refresh)
+
+    def open_files(self, card):
+        """The two-pane file manager for this runtime (tray/files.py)."""
+        from colab_cli.tray.files import FileManager
+
+        for w in self.windows:
+            if isinstance(w, FileManager) and w.session == card["name"] and w.isVisible():
+                w.raise_()
+                w.activateWindow()
+                return w
+        return self._show_window(FileManager(
+            card["name"], self.lang, colab_argv(self.state),
+            settings_store=getattr(self.state, "settings_store", None),
+        ))
 
     def attach(self, card):
         self.run_cli(actions.attach_argv(card))
