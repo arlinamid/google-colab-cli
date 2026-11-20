@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: The unsolicited upgrade banner (daily background fetch and the cached banner) is printed to stderr, not stdout. With an older install it ended up in machine-readable stdout and broke `colab exec --json`, `colab run --json`, `colab tray --snapshot --json` and the other JSON outputs. An explicit `colab update` still prints its result to stdout.
 2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
 2026-11-12: `colab usage --json` prints one `colab.v1` record of type `usage` (`balance_cu`, `rate_cu_per_hour`, `hours_left_at_rate`, `assignments`); agents use it with the cost feedback of docs/08_agent_feedback.md.
 2026-11-03: A uv tool install is detected on Windows too (`\uv\tools\` paths), so the upgrade hint and `--install` use uv there instead of pip.

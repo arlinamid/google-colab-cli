@@ -148,20 +148,26 @@ def announce_upgrade(
     banner is shown unsolicited (the daily background fetch and the cached
     banner on subsequent invocations); explicit ``colab update`` calls
     omit it because the user already opted in to seeing the result.
+
+    The unsolicited banner goes to stderr: it is printed around any command,
+    and in stdout it broke machine-readable output such as `exec --json`.
     """
+    err = show_disable_hint
     typer.echo(
-        f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})"
+        f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})",
+        err=err,
     )
     if is_self_install_supported() and ("pip" in install_cmd or "uv" in install_cmd):
-        typer.echo("[colab] You can run 'colab update --install' to upgrade in place.")
-    typer.echo(f"[colab] Run '{install_cmd}' to update.")
+        typer.echo("[colab] You can run 'colab update --install' to upgrade in place.", err=err)
+    typer.echo(f"[colab] Run '{install_cmd}' to update.", err=err)
     if show_disable_hint:
         typer.echo(
             "[colab] To silence this check, set "
             '"enable_update_check": false in '
-            "~/.config/colab-cli/settings.json"
+            "~/.config/colab-cli/settings.json",
+            err=err,
         )
-    typer.echo("")
+    typer.echo("", err=err)
 
 
 # ---------- Orchestration -----------------------------------------------
