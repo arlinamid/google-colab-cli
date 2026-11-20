@@ -66,6 +66,8 @@ class Settings(BaseModel):
     tray_interval: Optional[float] = None
     tray_notifications: bool = True
     tray_language: str = "auto"
+    # The tray's file manager: "contents" (contents API) or "ssh" (scp).
+    tray_transfer: str = "contents"
     tray_last_profile: Optional[str] = None
     # Warn when the balance lasts less than this many hours at the current
     # rate, or a runtime has been idle this many minutes (Colab reclaims

@@ -957,6 +957,48 @@ def _ssh_base_args(
     return args
 
 
+def scp_transfer(
+    session: SessionState,
+    identity: Optional[str],
+    source: str,
+    target: str,
+    *,
+    upload: bool,
+    recursive: bool,
+) -> int:
+    """Copies with OpenSSH scp through this session's WebSocket bridge.
+
+    The remote side is a path on the runtime (``content/x`` or ``/content/x``);
+    returns scp's exit code.
+    """
+    identity = _default_identity(identity)
+    _require_ssh_key(identity)
+    args = _ssh_base_args(_proxy_command(session, identity, _DEFAULT_SSH_MODE), identity)
+    args[0] = _openssh_tool("scp")
+    args.insert(1, "-q")
+    if recursive:
+        args.insert(1, "-r")
+    remote = f"{_SSH_HOST}:/{target.lstrip('/') if upload else source.lstrip('/')}"
+    args += [source, remote] if upload else [remote, target]
+    proc = subprocess.Popen(args)
+
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        # Cancelled (the tray's file manager sends SIGTERM): scp must not
+        # go on copying in the background.
+        return 130
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
 def _call_ssh(args: list[str], session: SessionState, keep_alive: bool) -> int:
     """Runs ssh and returns its exit code, pinging keep-alive while it runs.
 
