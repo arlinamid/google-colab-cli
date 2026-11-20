@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20: After the last allocation POST fails with `ReadTimeout` or 502/503/504, `Client.assign` waits one more backoff step and queries the notebook hash again, so a runtime the backend created after the timeout is returned and `colab new` / `colab run` save it instead of leaving a `[?]` orphan (upstream issue #263). If it is still not there, a timeout raises `AssignmentTimeoutError` (a `TimeoutError`, printed as one `[colab]` line) that points to `colab sessions`, `colab stop --orphans` and `COLAB_CLI_REQUEST_TIMEOUT`. Verified live with `COLAB_CLI_REQUEST_TIMEOUT=1 COLAB_CLI_ASSIGN_RETRIES=0`.
 2026-11-18: Merged upstream `colab stop --all` (#256) next to this fork's `--orphans`: `--all` stops every local session the server still knows (`sync_sessions`), `--orphans` the server runtimes with no local session; `--all` with `-s` or `--orphans` exits 2. `_stopOne` keeps passing `session_name` to `ColabRuntime`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-13: The session and settings stores create their directory before the lock: filelock opens the lock file in its constructor, so on a fresh machine (no `~/.config/colab-cli` yet, which the debug log used to create first) `settings.json.lock` failed with FileNotFoundError.
@@ -86,8 +87,17 @@ Allocation POSTs retry `ReadTimeout` and HTTP 502/503/504 at most
 the client waits `COLAB_CLI_RETRY_BACKOFF * 2**attempt` seconds (default 10, 20, 40).
 It then queries the same notebook hash: an existing allocation is returned directly;
 otherwise the refreshed XSRF token is used for the next POST. HTTP 412 still raises
-`TooManyAssignmentsError`; other errors are not retried. Failed initial/recovery
-GETs and exhausted POST retries propagate to the caller. There is no unlimited wait.
+`TooManyAssignmentsError`; other errors are not retried.
+
+The last POST is reconciled the same way: after one more backoff step (80 s with
+the defaults, 10 s with `COLAB_CLI_ASSIGN_RETRIES=0`) the client queries the
+notebook hash again, because the backend can finish creating a runtime whose POST
+response never arrived. A runtime found then is returned and saved like any other.
+If none is found, a timeout raises `AssignmentTimeoutError` (a `TimeoutError`, so
+the CLI prints it as one `[colab]` line) naming `colab sessions`,
+`colab stop --orphans` and `COLAB_CLI_REQUEST_TIMEOUT`; a final 502/503/504 is
+re-raised. Failed initial/recovery GETs propagate to the caller. There is no
+unlimited wait.
 
 ```bash
 COLAB_CLI_REQUEST_TIMEOUT=300 COLAB_CLI_ASSIGN_RETRIES=3 COLAB_CLI_RETRY_BACKOFF=10 \
