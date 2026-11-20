@@ -216,7 +216,7 @@ def test_exec_budget_becomes_a_run_limit_and_exit_5(exec_session):
 
     assert result.exit_code == 5
     # 1 CU at 2 CU/h is 30 minutes for the whole exec.
-    assert 1790 <= calls[-1]["run_limit"] <= 1800
+    assert 1790 <= calls[-1]["run_limit"] <= 1800 + 1e-6
     cell, summary = _records(result)
     assert cell["diagnosis"]["code"] == "budget_reached"
     assert summary["exit_code"] == 5

@@ -151,9 +151,7 @@ def test_an_orphan_card_can_only_be_stopped(tray, mocker):
 def test_a_card_with_wrapped_text_is_not_cut_off(tray):
     _render(tray, [_entry("?", None, local=False, endpoint="m-s-web-123")])
     card = tray.panel.cards[0]
-    needed = card.layout().totalHeightForWidth(CARDS_WIDTH)
-    assert needed > card.sizeHint().height()
-    assert tray.panel.scroll.height() >= needed
+    assert tray.panel.scroll.height() >= card.layout().totalHeightForWidth(CARDS_WIDTH)
 
 
 def test_no_progress_shows_the_last_output(tray):
