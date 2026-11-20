@@ -128,7 +128,7 @@ def test_many_runtimes_scroll(tray):
 
     assert len(tray.panel.cards) == 5
     first = tray.panel.cards[:MAX_VISIBLE_CARDS]
-    heights = [c.layout().totalHeightForWidth(CARDS_WIDTH) for c in first]
+    heights = [max(c.sizeHint().height(), c.layout().totalHeightForWidth(CARDS_WIDTH)) for c in first]
     assert tray.panel.scroll.height() == sum(heights) + 8 * (len(first) - 1)
     assert tray.panel.cards_host.sizeHint().height() > tray.panel.scroll.height()
 
@@ -597,3 +597,12 @@ def test_dialogs_stay_on_the_screen(tray, mocker):
     assert screen.contains(dialog.frameGeometry().topLeft())
     assert dialog.width() <= screen.width()
     dialog.deleteLater()
+
+
+def test_a_card_without_wrapped_text_is_shown(tray):
+    """Without a wrapped label (an idle runtime, e.g. one just attached) the
+    layout has no height for width: the list was 1 px high and looked empty."""
+    _render(tray, [_entry("web-2gw7hz", None)])
+    card = tray.panel.cards[0]
+    assert card.sizeHint().height() > 50
+    assert tray.panel.scroll.height() >= card.sizeHint().height()

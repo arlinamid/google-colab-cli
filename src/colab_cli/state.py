@@ -54,6 +54,9 @@ class Settings(BaseModel):
     )
     last_check: Optional[datetime] = None
     enable_update_check: bool = True
+    # SSH key for `colab ssh` / `colab forward` without -i (and so for the
+    # tray's SSH and forward buttons); COLAB_CLI_SSH_IDENTITY overrides it.
+    ssh_identity: Optional[str] = None
     # Highest fork version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
     # Wheel of that fork release, installed by `colab update --install`.

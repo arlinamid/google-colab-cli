@@ -329,7 +329,12 @@ class Panel(QWidget):
             c.ensurePolished()
             for child in c.findChildren(QWidget):
                 child.ensurePolished()
-        height = sum(c.layout().totalHeightForWidth(CARDS_WIDTH) for c in visible)
+        # A card without a wrapped label has no height for width (Qt
+        # returns next to nothing): take its size hint then.
+        height = sum(
+            max(c.sizeHint().height(), c.layout().totalHeightForWidth(CARDS_WIDTH))
+            for c in visible
+        )
         height += 8 * max(len(visible) - 1, 0)
         self.scroll.setFixedHeight(height if visible else 40)
 
