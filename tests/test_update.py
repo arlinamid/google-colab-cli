@@ -779,3 +779,31 @@ def test_uv_tool_install_detected_on_every_os(
 
     result = runner.invoke(app, ["update"])
     assert f"Run 'uv tool install --force {WHEEL.format(v='1.1.0')}' to update." in result.output
+
+
+def test_unsolicited_banners_go_to_stderr(mocker, app_version, fake_settings, mock_sources):
+    """Commands with machine-readable stdout (`exec --json`, `tray --snapshot
+    --json`) broke when the banner was printed into it."""
+    app_version("1.0.0")
+    mock_sources(fork="1.1.0")
+    fake_settings(last_check=datetime.now(timezone.utc) - timedelta(days=2))
+    fetched = runner.invoke(app, ["sessions"])
+    assert "available: 1.1.0" in fetched.stderr
+    assert "available" not in fetched.stdout and "colab update" not in fetched.stdout
+
+    fake_settings(
+        last_check=datetime.now(timezone.utc) - timedelta(hours=1),
+        latest_version="1.2.0",
+    )
+    mocker.patch("colab_cli.auto_update.check_for_updates")
+    cached = runner.invoke(app, ["sessions"])
+    assert "available: 1.2.0" in cached.stderr
+    assert "available" not in cached.stdout
+
+
+def test_explicit_update_check_still_prints_to_stdout(app_version, fake_settings, mock_sources):
+    app_version("1.0.0")
+    mock_sources(fork="1.1.0")
+    fake_settings()
+    result = runner.invoke(app, ["update"])
+    assert "available: 1.1.0" in result.stdout

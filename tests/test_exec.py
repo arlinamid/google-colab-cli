@@ -362,3 +362,25 @@ def test_cli_exec_check_only_does_not_resolve_secrets(tmp_path, mocker):
     )
     assert result.exit_code == 0, result.output
     read.assert_not_called()
+
+
+@pytest.mark.parametrize("command", [["exec", "-s", "s1"], ["repl", "-s", "s1"]])
+def test_a_failed_content_prelude_closes_the_kernel_connection(
+    mock_store, mock_runtime_class, mock_common_state, mocker, command
+):
+    """Without stop() the websocket thread (not a daemon) kept the process
+    alive for as long as an hour after "Connection was lost." (#264)."""
+    from colab_cli.runtime import SessionConnectionLost
+
+    session = MagicMock(url="http://url", token="t", kernel_id=None, session_id=None)
+    session.name = "s1"
+    mock_store.get.return_value = session
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch("colab_cli.commands.execution.is_stdin_tty", return_value=False)
+    runtime = mock_runtime_class.return_value
+    runtime.execute_code.side_effect = SessionConnectionLost("s1")
+
+    result = runner.invoke(app, command, input="print(1)\n")
+
+    assert result.exit_code != 0
+    runtime.stop.assert_called_once()
