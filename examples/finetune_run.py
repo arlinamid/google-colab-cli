@@ -30,9 +30,9 @@
 
 import os
 
+# Keep training-library imports after the runtime dependency installation.
 os.system("pip install -q -U 'bitsandbytes>=0.46.1'")
 
-# These imports must follow the pip install above (runtime dependency).
 import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig  # noqa: E402

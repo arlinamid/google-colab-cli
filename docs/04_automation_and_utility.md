@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-20 (upstream #212 and #259, not merged here): upstream made the inline Drive hook in `commands/automation.py` parse propagation responses defensively and report failures instead of dumping HTML and retrying. This fork already does all of that in `drive_auth.perform_drive_authorization` (`parse_colab_json`, `explain_propagation_failure` with the multi-account guidance, an error reply to the kernel so the mount does not wait out its timeout), so the sync kept the fork's hook and tests.
 2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
 2026-11-12: `colab usage --json` prints one `colab.v1` record of type `usage` (`balance_cu`, `rate_cu_per_hour`, `hours_left_at_rate`, `assignments`); agents use it with the cost feedback of docs/08_agent_feedback.md.
 2026-11-03: A uv tool install is detected on Windows too (`\uv\tools\` paths), so the upgrade hint and `--install` use uv there instead of pip.
@@ -150,6 +151,16 @@ How each provider supplies the scopes:
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
     subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
     `ColabRuntime.execute_code`. Same applies to `colab auth`.
+-   **Multi-account browsers**: Drive propagation is attributed to the Google
+    account that approves the consent page, which may not be the account the
+    CLI authenticated as. If the browser shows an account chooser, select the
+    account reported by `colab whoami`; approving with another account fails
+    with HTTP 400 even though the consent itself succeeded. A private window
+    only helps if it is already signed in to that account.
+-   **Failure reporting**: errors from the propagation endpoint never echo the
+    raw response body (often HTML). The CLI prints the status, points at
+    `colab whoami`, logs the body to the history file, and answers the waiting
+    kernel request so `drivemount` exits instead of hanging until its timeout.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 
