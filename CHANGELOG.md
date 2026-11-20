@@ -10,6 +10,30 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+## [0.8.0.5] - 2026-11-20
+
+A file manager in the tray, folder upload and download, and runtimes opened in the Colab web UI usable and stoppable from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.
+
+### Added
+
+- **tray:** a two-pane file manager, like Total Commander, from the Files button of a runtime's card: this computer on the left (drive list), the runtime's `/content` on the right. Copy by drag and drop, the Upload / Download buttons or F5; F7 new folder, F8 delete (local files go to the recycle bin), Enter opens, Backspace goes up; a command line runs commands in the runtime's folder. Transfers go over the contents API (no key) or SSH / scp, with a progress bar (files done / total) and a Cancel button. If the runtime stops or the connection ends, a banner says so and only the local pane stays usable (docs/09, section 5). (#23)
+- **files:** `colab upload -r` and `colab download -r` copy whole folders, empty ones included (upstream PR #267 by Koji Shukawa, taken before Google merged it, with its review applied). (#22)
+- **files:** `colab ls --json`, `colab mkdir`, `colab rm -r` (a folder with everything in it), `--via ssh` on `upload`/`download` (copies with scp through the SSH bridge) and `--progress` (a line per copied file). (#23)
+- **ssh:** a default SSH key for `colab ssh` and `colab forward` without `-i`: `ssh_identity` in `settings.json` or `COLAB_CLI_SSH_IDENTITY`. The tray's SSH and forward buttons use it, so a key not named `id_ed25519` / `id_ecdsa` works there too. (#21)
+- **attach:** `colab attach --endpoint ID` uses a runtime opened elsewhere, such as in the Colab web UI, as a local session, so you can upload files to a notebook's runtime with `colab upload`, `colab ssh` or scp, or run code on it with `colab exec` (in the CLI's own kernel; `/content` is shared). The tray's card for such a runtime has a Connect button. (#20)
+- **stop:** `colab stop --endpoint ID` stops one runtime by the endpoint `colab sessions` lists, also one with no local session, such as a runtime opened in the Colab web UI. A local session's endpoint stops that session like `-s`; an unknown endpoint exits 1 (upstream issue #263). (#14)
+- **tray:** a runtime with no local session can be stopped from the panel: its card shows the endpoint instead of `?`, says it may be open in the Colab web UI or on another computer, and has a Stop button. Before, the card had no buttons. (#14)
+- **ssh:** `colab ssh --force` kills the runtime's stale SSH sessions before connecting, for when a dead client holds the slot and the server answers 429 (upstream #254). It works with `-L`, `-N`, `-- CMD` and `--proxy-mode`. (#18)
+
+### Fixed
+
+- **new:** when the request for a runtime timed out, the runtime Colab created afterwards was not saved and kept using compute units as a `[?]` orphan. `colab new` and `colab run` now check once more and save it; if there is still none, one line says how to find and stop it instead of a traceback (upstream issue #263). (#13)
+- **exec:** a slow kernel connection no longer loses the code and hangs the CLI. `colab exec` and `colab repl` wait for the connection to open (`COLAB_CLI_WS_CONNECT_TIMEOUT`, default 60 s) before sending anything, say so if it does not, and always close it, so the process exits (upstream discussion #264, which saw a 71-minute hang). (#16)
+- **update:** the upgrade notice shown around other commands goes to stderr. With an older install it was printed into the JSON of `colab exec --json`, `colab run --json` and `colab tray --snapshot --json`, which could then not be read. (#17)
+- **tray:** the stop dialog wraps its text at a fixed width and stays on the screen; a card with a long detail line no longer cuts off its last line and buttons. (#14)
+- **examples:** the fine-tuning example marks its imports after the runtime `pip install` (upstream #222). (#18)
+- **tray:** after Connect on a web UI runtime the panel looked empty: an idle card with no detail line was sized to about 1 px. (#21)
+
 ## [0.8.0.4] - 2026-11-18
 
 Google's changes since 0.8.0 merged in (up to 17 November 2026, before Google's next release), next to everything this fork adds; the fork's own logo; an About window in the tray. Still based on Google's Colab CLI 0.8.0.
@@ -233,6 +257,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.8.0.5]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.5
 [0.8.0.4]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.4
 [0.8.0.3]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.3
 [0.8.0.2]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.2
