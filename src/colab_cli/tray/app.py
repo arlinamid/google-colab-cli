@@ -141,6 +141,7 @@ class TrayApp(QObject):
         self.panel.ssh_clicked.connect(lambda c: self.in_terminal(actions.ssh_argv(c)))
         self.panel.open_clicked.connect(self.open_service)
         self.panel.stop_clicked.connect(self.ask_stop)
+        self.panel.attach_clicked.connect(self.attach)
         self.panel.profile_clicked.connect(self.start_profile)
         self.panel.refresh_clicked.connect(self.refresh)
         self.panel.settings_clicked.connect(self.open_settings)
@@ -446,6 +447,10 @@ class TrayApp(QObject):
                 if child["session"] == card["name"] and child["proc"].poll() is None:
                     child["proc"].terminate()
         self.run_cli(actions.stop_argv(card, choice))
+        QTimer.singleShot(3000, self.refresh)
+
+    def attach(self, card):
+        self.run_cli(actions.attach_argv(card))
         QTimer.singleShot(3000, self.refresh)
 
     def confirm(self, title: str, body: str) -> bool:

@@ -92,6 +92,11 @@ def stop_options(card: Dict[str, Any], has_service: bool, lang: str) -> List[Tup
     return options
 
 
+def attach_argv(card: Dict[str, Any]) -> List[str]:
+    """Make a runtime with no local session (e.g. from the web UI) a local one."""
+    return ["attach", "--endpoint", card["endpoint"]]
+
+
 def stop_argv(card: Dict[str, Any], choice: str) -> List[str]:
     if choice == "job":
         return ["job", "stop", "-s", card["name"], card["job_id"]]
