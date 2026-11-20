@@ -56,6 +56,8 @@ def ls(
     except Exception as e:
         typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
+    finally:
+        contents.close()
 
 
 def rm(
@@ -78,36 +80,70 @@ def rm(
     except Exception as e:
         typer.echo(f"[colab] Error: {redact_secrets(str(e))}")
         raise typer.Exit(1)
+    finally:
+        contents.close()
 
 
 def upload(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
-    local_path: Annotated[str, typer.Argument(help="Local file to upload")] = ...,
+    local_path: Annotated[
+        str, typer.Argument(help="Local file or directory to upload")
+    ] = ...,
     remote_path: Annotated[str, typer.Argument(help="Remote path to upload to")] = ...,
+    recursive: Annotated[
+        bool,
+        typer.Option("-r", "--recursive", help="Recursively upload a directory"),
+    ] = False,
 ):
-    """Upload a file to a session"""
+    """Upload a file or directory to a session"""
     from colab_cli.common import state
 
     name = state.resolve_session(session)
     remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
-    if not os.path.isfile(local_path):
-        typer.echo(f"[colab] Local file '{local_path}' not found.")
+    is_dir = os.path.isdir(local_path)
+    if is_dir and not recursive:
+        typer.echo(
+            f"[colab] '{local_path}' is a directory. Use -r/--recursive to upload directories."
+        )
+        raise typer.Exit(1)
+    if not is_dir and not os.path.isfile(local_path):
+        label = "path" if recursive else "file"
+        typer.echo(f"[colab] Local {label} '{local_path}' not found.")
         raise typer.Exit(1)
     contents = ContentsClient(s)
     try:
-        contents.upload(local_path, remote_path)
-        state.history.log_event(
-            name,
-            "file_operation",
-            {"op": "upload", "local": local_path, "remote": remote_path},
-        )
-        typer.echo(f"[colab] Uploaded '{local_path}' to '{remote_path}'")
+        if is_dir:
+            count = contents.upload_dir(local_path, remote_path)
+            state.history.log_event(
+                name,
+                "file_operation",
+                {
+                    "op": "upload",
+                    "local": local_path,
+                    "remote": remote_path,
+                    "recursive": True,
+                    "count": count,
+                },
+            )
+            typer.echo(
+                f"[colab] Uploaded directory '{local_path}' ({count} file(s)) to '{remote_path}'"
+            )
+        else:
+            contents.upload(local_path, remote_path)
+            state.history.log_event(
+                name,
+                "file_operation",
+                {"op": "upload", "local": local_path, "remote": remote_path},
+            )
+            typer.echo(f"[colab] Uploaded '{local_path}' to '{remote_path}'")
     except Exception as e:
         typer.echo(f"[colab] Upload failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
+    finally:
+        contents.close()
 
 
 def download(
@@ -118,10 +154,14 @@ def download(
         str, typer.Argument(help="Remote path to download from")
     ] = ...,
     local_path: Annotated[
-        str, typer.Argument(help="Local path to save the file")
+        str, typer.Argument(help="Local path to save the file or directory")
     ] = ...,
+    recursive: Annotated[
+        bool,
+        typer.Option("-r", "--recursive", help="Recursively download a directory"),
+    ] = False,
 ):
-    """Download a file from a session"""
+    """Download a file or directory from a session"""
     from colab_cli.common import state
 
     name = state.resolve_session(session)
@@ -129,16 +169,35 @@ def download(
     s = state.get_session(name)
     contents = ContentsClient(s)
     try:
-        contents.download(remote_path, local_path)
-        state.history.log_event(
-            name,
-            "file_operation",
-            {"op": "download", "remote": remote_path, "local": local_path},
-        )
-        typer.echo(f"[colab] Downloaded '{remote_path}' to '{local_path}'")
+        if recursive:
+            count = contents.download_dir(remote_path, local_path)
+            state.history.log_event(
+                name,
+                "file_operation",
+                {
+                    "op": "download",
+                    "remote": remote_path,
+                    "local": local_path,
+                    "recursive": True,
+                    "count": count,
+                },
+            )
+            typer.echo(
+                f"[colab] Downloaded '{remote_path}' ({count} file(s)) to '{local_path}'"
+            )
+        else:
+            contents.download(remote_path, local_path)
+            state.history.log_event(
+                name,
+                "file_operation",
+                {"op": "download", "remote": remote_path, "local": local_path},
+            )
+            typer.echo(f"[colab] Downloaded '{remote_path}' to '{local_path}'")
     except Exception as e:
         typer.echo(f"[colab] Download failed: {redact_secrets(str(e))}")
         raise typer.Exit(1)
+    finally:
+        contents.close()
 
 
 def _launch_editor(path: str) -> None:
@@ -184,8 +243,6 @@ def edit(
     remote_path = undo_msys_path(remote_path)
     s = state.get_session(name)
 
-    contents = ContentsClient(s)
-
     def get_file_hash(path):
         if not os.path.exists(path):
             return None
@@ -201,11 +258,14 @@ def edit(
             tmpdir, os.path.basename(remote_path.rstrip("/")) or "file"
         )
 
+        dl_client = ContentsClient(s)
         try:
-            contents.download(remote_path, local_path)
+            dl_client.download(remote_path, local_path)
         except Exception:
             # If download fails, assume file doesn't exist and start empty
             pass
+        finally:
+            dl_client.close()
         if not os.path.exists(local_path):
             open(local_path, "wb").close()
 
@@ -222,7 +282,11 @@ def edit(
         hash_after = get_file_hash(local_path)
 
         if hash_after != hash_before:
-            contents.upload(local_path, remote_path)
+            ul_client = ContentsClient(s)
+            try:
+                ul_client.upload(local_path, remote_path)
+            finally:
+                ul_client.close()
             state.history.log_event(
                 name,
                 "file_operation",

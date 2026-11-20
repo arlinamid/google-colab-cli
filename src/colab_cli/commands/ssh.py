@@ -464,6 +464,25 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
     raise typer.Exit(code=2)
 
 
+def _default_identity(identity: Optional[str]) -> Optional[str]:
+    """``-i``, else ``COLAB_CLI_SSH_IDENTITY``, else ``ssh_identity`` in settings.json.
+
+    The tray's SSH and forward buttons pass no ``-i``; without a setting only
+    ``~/.ssh/id_ed25519`` and ``id_ecdsa`` could be used from there.
+    """
+    if identity:
+        return identity
+    if env := os.getenv("COLAB_CLI_SSH_IDENTITY"):
+        return env
+    from colab_cli.common import state
+
+    with contextlib.suppress(Exception):
+        configured = state.settings_store.load().ssh_identity
+        if isinstance(configured, str) and configured:
+            return configured
+    return None
+
+
 def _ssh_dir() -> Path:
     return Path(os.path.expanduser("~/.ssh"))
 
@@ -472,7 +491,9 @@ def _no_key_message(ssh_dir: Path) -> str:
     """Says no default key exists, naming other usable keys in ``ssh_dir``."""
     message = (
         "[colab] no SSH public key found in ~/.ssh/. Run "
-        "`ssh-keygen -t ed25519` to generate one, or pass --identity."
+        "`ssh-keygen -t ed25519` to generate one, or pass --identity "
+        '(to keep using a key, set "ssh_identity" in '
+        "~/.config/colab-cli/settings.json or COLAB_CLI_SSH_IDENTITY)."
     )
     others = []
     with contextlib.suppress(OSError):
@@ -1344,6 +1365,7 @@ def ssh(
     if proxy_mode and cmd:
         typer.echo("[colab] --proxy-mode takes no command.", err=True)
         raise typer.Exit(code=2)
+    identity = _default_identity(identity)
     forwards = [_parse_forward(f) for f in forward or []]
     keep_alive = bool(forwards) and not no_keep_alive
     if no_shell and not forwards:
@@ -1422,6 +1444,7 @@ def forward(
     Only your machine can reach it. The runtime is kept alive meanwhile.
     """
     forwards = [_parse_forward(p) for p in ports]
+    identity = _default_identity(identity)
     _require_ssh_key(identity)
     s = _resolve_session(session)
     raise typer.Exit(
