@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-25: Merged upstream #279: every Contents API request (`ContentsClient._request`, on this fork's pooled `requests.Session`) has a `(30, 300)` s `(connect, read)` timeout, so a dropped connection fails instead of hanging `upload`/`download`/`ls`/`rm`/`edit` and the tray file manager (discussion #252).
 2026-11-20: `upload`/`download --progress` prints `[colab] progress DONE/TOTAL PATH` after each file (TOTAL is `?` for a recursive download, which does not count first); the tray's file manager reads it for its progress bar. `upload/download --via ssh` kill their scp when they get SIGTERM, so a cancel does not leave scp copying.
 2026-11-20: For the tray's file manager: `colab ls --json` (one object: path, items with name/type/size/last_modified, folders first; an error is JSON too), `colab mkdir`, `colab rm -r` (`ContentsClient.rm_tree`, children first, since the contents API refuses a folder that is not empty), and `--via ssh [-i KEY]` on `upload`/`download`, which copies with OpenSSH scp through `colab ssh --proxy-mode` (`ssh.scp_transfer`) using the default key setting. Tested live on an attached web UI runtime.
 2026-11-20: Took upstream PR #267 (`colab upload -r` / `colab download -r`, by Koji Shukawa) before Google merged it, with its review comments applied: no `ntpath` import (a drive-prefixed entry name is still refused on Windows, through `os.path.splitdrive`), simpler `posixpath.join` calls, `_is_local_symlink` so a destination given as `link/` is still seen as a symlink on POSIX, and HTTP errors without the URL (the fork's message, which hides the runtime proxy token). Tested live on a Colab web UI runtime: a tree with subfolders and an empty folder uploaded and downloaded back identical.
@@ -43,6 +44,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 - **Response**: JSON with `content` field.
 - **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
 - **Recursive (`-r` / `--recursive`)**: Walks remote directories returned by the Contents API, creates matching local directories (including empty directories), validates entry names against path traversal, and downloads nested files/notebooks (or falls back to downloading a single file if `remote_path` is not a directory). Non-recursive `download` raises `IsADirectoryError` with a `-r/--recursive` hint when targeting a directory.
+- **Timeouts**: Every Contents API request uses a `(connect, read)` timeout of `(30, 300)` seconds. The read timeout bounds the wait between bytes, not the whole transfer, so large files still finish while a dropped connection fails with an error instead of hanging `ls`, `rm`, `upload`, `download`, or `edit` forever.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.

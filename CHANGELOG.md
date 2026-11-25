@@ -10,6 +10,15 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Changed
+
+- **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream #277). `--all` with no sessions still exits 0.
+
+### Fixed
+
+- **files:** `colab upload`, `download`, `ls`, `rm`, `edit` and the tray's file manager no longer hang forever when the connection drops: each request gives up after 30 s without a connection or 300 s without data (upstream #279).
+- **exec:** Google's CLI now also exits 1 when the code raises (upstream #278). This fork already did; a notebook still runs its remaining cells unless you pass `--stop-on-error`.
+
 ## [0.8.0.5] - 2026-11-20
 
 A file manager in the tray, folder upload and download, and runtimes opened in the Colab web UI usable and stoppable from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.
