@@ -20,6 +20,7 @@ below corresponds to a tag of the same name.
 
 ### Fixed
 
+- **files:** files larger than about 75 MB can be uploaded: Colab refused requests over 100 MB with 400 Bad Request. `colab upload`, `upload -r`, `colab edit` and the tray's file manager send such a file in 64 MB parts; smaller files go in one request as before. If a part fails, the message says the remote file may be incomplete (upstream PR #272 by yschoi9733, taken before Google merged it).
 - **new:** `colab new` and `colab stop` work behind an HTTP(S) proxy (`HTTPS_PROXY`), where Colab answered 411 Length Required: requests through a proxy that have no body are sent without a `Content-Length` header. Without a proxy nothing changes (upstream issue #270).
 - **exec:** a connection that drops without closing (a network that stops passing data) no longer keeps `colab exec` and `colab repl` waiting forever, with `--timeout 0` too, while the runtime uses compute units: the CLI checks that its pings are answered and reports the lost session (exit 3) about 80 s at most after the drop. `COLAB_CLI_WS_PING_TIMEOUT` sets the wait, `0` turns it off (upstream discussion #283).
 - **ssh:** `colab ssh -s B` no longer runs on session A's runtime when `~/.ssh/config` turns on connection sharing (`ControlMaster auto`); the CLI's own ssh and scp never share a connection (upstream discussion #247).

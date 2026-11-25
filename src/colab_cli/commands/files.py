@@ -428,7 +428,9 @@ def edit(
         hash_after = get_file_hash(local_path)
 
         if hash_after != hash_before:
-            ul_client = ContentsClient(s)
+            ul_client = ContentsClient(
+                s, refresh_session=lambda: state.get_session(name)
+            )
             try:
                 ul_client.upload(local_path, remote_path)
             finally:
