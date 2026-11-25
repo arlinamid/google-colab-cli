@@ -607,3 +607,48 @@ def test_issue_request_auth_error_uses_cached_support_for_hint(tmp_path, mock_se
 
     assert "--public-api" in str(exc2.value)
     assert store.load().tunnel_api_supported is False
+
+
+@pytest.fixture
+def env_proxies(monkeypatch):
+    """Proxies from the environment only (not the Windows registry)."""
+    import urllib.request
+
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    monkeypatch.setattr(requests.utils, "getproxies", urllib.request.getproxies_environment)
+    return monkeypatch
+
+
+def test_bodyless_post_through_a_proxy_is_sent_chunked(client, mock_session, env_proxies):
+    """A forward proxy in front of Colab answers a POST that carries a
+    Content-Length (even 0) with 411 Length Required, but passes a chunked
+    one (upstream issue #270). An empty iterator makes requests send
+    Transfer-Encoding: chunked with no body."""
+    env_proxies.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    mock_session.request.return_value.text = ""
+    client._issue_request("https://colab.research.google.com/tun/m/assign", method="POST")
+    data = mock_session.request.call_args.kwargs["data"]
+    assert not isinstance(data, (bytes, str)) and list(data) == []
+
+
+def test_post_with_a_body_through_a_proxy_is_unchanged(client, mock_session, env_proxies):
+    env_proxies.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    mock_session.request.return_value.text = ""
+    client._issue_request(
+        "https://colab.research.google.com/tun/m/x", method="POST", json={"a": 1}
+    )
+    assert "data" not in mock_session.request.call_args.kwargs
+
+
+@pytest.mark.parametrize("no_proxy", [None, "colab.research.google.com"])
+def test_bodyless_post_without_a_proxy_is_unchanged(
+    client, mock_session, env_proxies, no_proxy
+):
+    if no_proxy:
+        env_proxies.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+        env_proxies.setenv("NO_PROXY", no_proxy)
+    mock_session.request.return_value.text = ""
+    client._issue_request("https://colab.research.google.com/tun/m/assign", method="POST")
+    assert "data" not in mock_session.request.call_args.kwargs
