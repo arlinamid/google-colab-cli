@@ -154,6 +154,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab clone [-s NAME] REPO [DEST] [--branch B] [--depth N] [--token SOURCE]` | Clone a git repository (GitHub `owner/name` or https URL) onto the runtime |
 | `colab keepalive [-s NAME] [--minutes N]` | Keep a runtime alive without running code (e.g. behind a detached share) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
+| `colab logout` | Clear local OAuth2 and cached runtime tokens to sign out or switch accounts |
 | `colab usage [--json]` | Show account compute-unit usage rate and balance (`--json`: balance, rate and hours left at that rate) |
 | `colab pay` | Open the Colab subscription page to manage compute units |
 | `colab version` | Print the installed version of the CLI |

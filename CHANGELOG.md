@@ -10,6 +10,10 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Added
+
+- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR #266 by Koji Shukawa, taken before Google merged it).
+
 ### Changed
 
 - **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream #277). `--all` with no sessions still exits 0.
