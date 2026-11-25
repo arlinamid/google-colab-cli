@@ -94,7 +94,11 @@ def _assert_safe_local_child(real_root: str, child_local: str) -> None:
 # sent base64-encoded (4/3 the size) inside JSON, so a file that does not fit
 # in one request goes up in chunks of UPLOAD_CHUNK_SIZE (about 85 MiB encoded).
 MAX_REQUEST_BODY = 100 * 1024 * 1024
-UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+# Measured 2026-11-25 at about 2 MiB/s: 2 of 9 requests of 56-64 MiB ended in
+# an SSL EOF partway, none of 16 MiB did, so chunks are kept small and a
+# dropped one is sent again (UPLOAD_RETRIES).
+UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
+UPLOAD_RETRIES = 2
 
 
 class IncompleteUploadError(IOError):
@@ -221,21 +225,23 @@ class ContentsClient:
             raise ValueError(f"chunk_size {chunk_size} does not fit in one request")
         with open(local_path, "rb") as f:
             if fits_in_one_request(remote_path, os.fstat(f.fileno()).st_size):
-                return self._put_chunk(remote_path, f.read(), 1)
+                return self._put_chunk_retrying(remote_path, f.read(), 1, 0)
             data = f.read(chunk_size)
             next_data = f.read(chunk_size)
             if not next_data:
-                return self._put_chunk(remote_path, data, 1)
+                return self._put_chunk_retrying(remote_path, data, 1, 0)
             sent = 0
+            offset = 0
             failure = None
             try:
                 while data:
                     if sent:
                         self._refresh_token()
-                    model = self._put_chunk(
-                        remote_path, data, sent + 1 if next_data else -1
+                    model = self._put_chunk_retrying(
+                        remote_path, data, sent + 1 if next_data else -1, offset
                     )
                     sent += 1
+                    offset += len(data)
                     data, next_data = next_data, f.read(chunk_size)
             except (Exception, SystemExit) as e:
                 status = get_status_code(e)
@@ -258,6 +264,35 @@ class ContentsClient:
             session_state = self._refresh_session()
             self.base_url = session_state.url.rstrip("/")
             self.token = session_state.token
+
+    def _put_chunk_retrying(
+        self, remote_path: str, data: bytes, chunk: int, offset: int
+    ):
+        """Send a chunk, again up to UPLOAD_RETRIES times if the connection drops.
+
+        Chunk 1 replaces the file, so it is always safe to send again. A later
+        chunk is appended, so the remote size decides: ``offset`` (the bytes
+        before this chunk) means it was not stored and is sent again, ``offset +
+        len(data)`` means only the response was lost, anything else stops the
+        upload with the original error.
+        """
+        for attempt in range(UPLOAD_RETRIES + 1):
+            try:
+                return self._put_chunk(remote_path, data, chunk)
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt == UPLOAD_RETRIES:
+                    raise
+                if chunk == 1:
+                    continue
+                try:
+                    model = self._request("GET", remote_path, params={"content": "0"})
+                except Exception:
+                    model = None
+                size = (model or {}).get("size")
+                if size == offset + len(data):
+                    return model
+                if size != offset:
+                    raise
 
     def _put_chunk(self, remote_path: str, data: bytes, chunk: int):
         content = base64.b64encode(data).decode("ascii")

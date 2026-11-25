@@ -1103,3 +1103,90 @@ def test_upload_rejects_bad_chunk_size(client, tmp_path, small_requests, chunk_s
     """Chunks must be positive and fit in one request (7 bytes do not here)."""
     with pytest.raises(ValueError):
         _upload(client, tmp_path, FakeContentsServer(), b"0123", chunk_size)
+
+
+class DroppingContentsServer(FakeContentsServer):
+    """Like FakeContentsServer, but `drops` maps a PUT's call number (from 1)
+    to "before" (the connection drops before the server stores the chunk) or
+    "after" (the chunk is stored, then the response is lost), as a network
+    that cuts long uploads off with an SSL EOF does. GET with content=0
+    answers the file's size."""
+
+    def __init__(self, drops=None, files=None):
+        super().__init__(files=files)
+        self.drops = dict(drops or {})
+        self.puts = 0
+
+    def __call__(self, method, url, params=None, json=None, timeout=None):
+        path = url.split("/api/contents/", 1)[1]
+        if method == "GET":
+            self.calls.append((path, "size"))
+            if path not in self.files:
+                return self._response(404)
+            return self._response(200, {"type": "file", "size": len(self.files[path])})
+        self.puts += 1
+        drop = self.drops.get(self.puts)
+        if drop == "before":
+            self.calls.append((path, json["chunk"]))
+            raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+        resp = super().__call__(method, url, params=params, json=json, timeout=timeout)
+        if drop == "after":
+            raise requests.exceptions.ConnectionError("Connection aborted")
+        return resp
+
+
+def test_a_dropped_first_chunk_is_sent_again(client, tmp_path, small_requests):
+    """Chunk 1 replaces the file, so sending it again is always safe."""
+    server = DroppingContentsServer(drops={1: "before"})
+    _upload(client, tmp_path, server, b"0123456789")
+    assert server.files["content/big.bin"] == b"0123456789"
+    assert [c for _, c in server.calls] == [1, 1, 2, -1]
+
+
+def test_a_dropped_later_chunk_that_was_not_stored_is_sent_again(
+    client, tmp_path, small_requests
+):
+    server = DroppingContentsServer(drops={2: "before"})
+    _upload(client, tmp_path, server, b"0123456789")
+    assert server.files["content/big.bin"] == b"0123456789"
+    assert [c for _, c in server.calls] == [1, 2, "size", 2, -1]
+
+
+def test_a_later_chunk_stored_before_the_drop_is_not_appended_twice(
+    client, tmp_path, small_requests
+):
+    server = DroppingContentsServer(drops={2: "after"})
+    _upload(client, tmp_path, server, b"0123456789")
+    assert server.files["content/big.bin"] == b"0123456789"
+    assert [c for _, c in server.calls] == [1, 2, "size", -1]
+
+
+def test_a_single_request_upload_is_sent_again_after_a_drop(client, tmp_path):
+    server = DroppingContentsServer(drops={1: "before"})
+    _upload(client, tmp_path, server, b"0123")
+    assert server.files["content/big.bin"] == b"0123"
+
+
+def test_an_upload_that_keeps_dropping_reports_an_incomplete_file(
+    client, tmp_path, small_requests
+):
+    server = DroppingContentsServer(drops={2: "before", 3: "before", 4: "before"})
+    with pytest.raises(IncompleteUploadError) as excinfo:
+        _upload(client, tmp_path, server, b"0123456789")
+    assert "after 1 of its chunks were sent (SSLError)" in str(excinfo.value)
+    assert server.puts == 4
+
+
+def test_an_unexpected_remote_size_stops_the_upload(client, tmp_path, small_requests):
+    """Neither the size before nor after the chunk: something else wrote to
+    the file, so the upload stops instead of guessing."""
+    server = DroppingContentsServer(drops={2: "before"})
+    original = server.__call__
+
+    def tampering(method, url, **kwargs):
+        if method == "GET":
+            server.files["content/big.bin"] += b"x"
+        return original(method, url, **kwargs)
+
+    with pytest.raises(IncompleteUploadError):
+        _upload(client, tmp_path, tampering, b"0123456789")
