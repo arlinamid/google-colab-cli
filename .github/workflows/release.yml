@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag such as v0.7.5.2 to publish a GitHub Release with the wheel, the
+# Push a tag such as v0.8.0.6 to publish a GitHub Release with the wheel, the
 # sdist and standalone `colab` binaries for Linux, Windows and macOS (built
 # with PyInstaller; no Python needed). The wheel is pure Python
 # (py3-none-any), so one file installs on Linux, macOS and Windows:
