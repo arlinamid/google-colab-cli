@@ -10,6 +10,23 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
+### Changed
+
+- **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream #277). `--all` with no sessions still exits 0.
+
+### Added
+
+- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR #266 by Koji Shukawa, taken before Google merged it).
+
+### Fixed
+
+- **files:** files larger than about 75 MB can be uploaded: Colab refused requests over 100 MB with 400 Bad Request. `colab upload`, `upload -r`, `colab edit` and the tray's file manager send such a file in 16 MB parts; smaller files go in one request as before. A part whose connection drops is sent again (twice at most) without writing it twice; if it still fails, the message says the remote file may be incomplete (upstream PR #272 by yschoi9733, taken before Google merged it).
+- **new:** `colab new` and `colab stop` work behind an HTTP(S) proxy (`HTTPS_PROXY`), where Colab answered 411 Length Required: requests through a proxy that have no body are sent without a `Content-Length` header. Without a proxy nothing changes (upstream issue #270).
+- **exec:** a connection that drops without closing (a network that stops passing data) no longer keeps `colab exec` and `colab repl` waiting forever, with `--timeout 0` too, while the runtime uses compute units: the CLI checks that its pings are answered and reports the lost session (exit 3) about 80 s at most after the drop. `COLAB_CLI_WS_PING_TIMEOUT` sets the wait, `0` turns it off (upstream discussion #283).
+- **ssh:** `colab ssh -s B` no longer runs on session A's runtime when `~/.ssh/config` turns on connection sharing (`ControlMaster auto`); the CLI's own ssh and scp never share a connection (upstream discussion #247).
+- **files:** `colab upload`, `download`, `ls`, `rm`, `edit` and the tray's file manager no longer hang forever when the connection drops: each request gives up after 30 s without a connection or 300 s without data (upstream #279).
+- **exec:** Google's CLI now also exits 1 when the code raises (upstream #278). This fork already did; a notebook still runs its remaining cells unless you pass `--stop-on-error`.
+
 ## [0.8.0.5] - 2026-11-20
 
 A file manager in the tray, folder upload and download, and runtimes opened in the Colab web UI usable and stoppable from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.

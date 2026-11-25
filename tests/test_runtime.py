@@ -363,3 +363,102 @@ def test_a_connect_timeout_is_not_reported_as_an_interrupted_run(monkeypatch):
         runtime.execute_code("1", output_hook=lambda o: None)
     assert "interrupted" not in str(exc.value)
     assert len(made) == 1
+
+
+def _silent_websocket_server():
+    """A server that completes the websocket handshake, then never answers
+    again: a half-open connection whose pings get no pong."""
+    import base64
+    import hashlib
+    import socket
+    import threading
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def serve():
+        conn, _ = server.accept()
+        request = b""
+        while b"\r\n\r\n" not in request:
+            request += conn.recv(4096)
+        key = next(
+            line.split(b":", 1)[1].strip()
+            for line in request.split(b"\r\n")
+            if line.lower().startswith(b"sec-websocket-key")
+        )
+        accept = base64.b64encode(
+            hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest()
+        )
+        conn.sendall(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+            b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n"
+        )
+        try:
+            while conn.recv(4096):
+                pass
+        except OSError:
+            pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    return server
+
+
+def test_a_websocket_whose_pings_get_no_pong_counts_as_lost(monkeypatch):
+    """jupyter_kernel_client sends pings but never checks for pongs, so a
+    half-open connection kept `colab exec` waiting while the runtime billed
+    (upstream discussion #283). The kernel client's websocket now gives up
+    after COLAB_CLI_WS_PING_TIMEOUT, which clears connection_ready, the
+    signal execute_code turns into SessionConnectionLost."""
+    from jupyter_kernel_client.wsclient import KernelWebSocketClient
+
+    from colab_cli.runtime import _with_ping_timeout
+
+    monkeypatch.setenv("COLAB_CLI_WS_PING_TIMEOUT", "0.5")
+    server = _silent_websocket_server()
+    cls = _with_ping_timeout(KernelWebSocketClient)
+    client = cls(
+        endpoint=f"ws://127.0.0.1:{server.getsockname()[1]}/channels",
+        ping_interval=2,
+        timeout=5,
+        subprotocol=jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
+    )
+    try:
+        client.start_channels(shell=False, iopub=False, stdin=False, hb=False, control=False)
+        assert client.connection_ready.is_set()
+        client.connection_thread.join(timeout=10)
+        assert not client.connection_thread.is_alive(), "dead websocket not noticed"
+        assert not client.connection_ready.is_set()
+    finally:
+        client.kernel_socket.keep_running = False
+        client.kernel_socket.close()
+        server.close()
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [(None, 20.0), ("5", 5.0), ("0", None), ("junk", 20.0), ("90", 59.0)],
+)
+def test_ws_ping_timeout_setting(monkeypatch, env, expected):
+    """websocket-client refuses a ping_timeout that is not below ping_interval."""
+    from colab_cli.runtime import _ws_ping_timeout
+
+    if env is None:
+        monkeypatch.delenv("COLAB_CLI_WS_PING_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("COLAB_CLI_WS_PING_TIMEOUT", env)
+    assert _ws_ping_timeout(60) == expected
+
+
+def test_kernel_client_installs_the_ping_timeout_client(monkeypatch):
+    from jupyter_kernel_client.wsclient import KernelWebSocketClient
+
+    kc = MagicMock()
+    kc._manager.client_factory = KernelWebSocketClient
+    kc._manager.client.connection_ready.wait.return_value = True
+    runtime = ColabRuntime("http://url", "token123")
+    monkeypatch.setattr(runtime, "_new_kernel_client", lambda: kc)
+    runtime.kernel_client
+    factory = kc._manager.client_factory
+    assert issubclass(factory, KernelWebSocketClient)
+    assert factory is not KernelWebSocketClient

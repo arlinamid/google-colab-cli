@@ -15,7 +15,8 @@
 """Native Windows live SSH check; allocates and releases one CPU runtime.
 
 Run from the repository with `uv run python integration/repro_windows_ssh/test.py`.
-Exit 77 means cached OAuth credentials are missing; no runtime is allocated.
+Exit 77 means prerequisites (native Windows, keyring OAuth2 token, or OpenSSH)
+are missing; no runtime is allocated.
 """
 
 import os
@@ -27,10 +28,15 @@ import tempfile
 import uuid
 
 import keyring
+from keyring.errors import KeyringError
 
 from colab_cli.auth import KEYRING_SERVICE_NAME, KEYRING_USERNAME
 from colab_cli.commands.ssh import _proxy_command, _ssh_base_args
 from colab_cli.common import State
+
+
+def has_oauth2_token() -> bool:
+    return bool(keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME))
 
 
 def colab(*args, check=True):
@@ -46,8 +52,12 @@ def main():
     if sys.platform != "win32":
         print("SKIP: requires native Windows and Windows OpenSSH.")
         return 77
-    # The OAuth2 token lives in the OS keyring (token.json is legacy).
-    if not keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME):
+    try:
+        has_token = has_oauth2_token()
+    except KeyringError as exc:
+        print(f"SKIP: could not read OAuth2 credentials from OS keyring ({exc}).")
+        return 77
+    if not has_token:
         print("SKIP: no cached OAuth2 credentials. First run:")
         print("  uv run colab --auth=oauth2 sessions")
         return 77

@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-25: Behind a forward proxy, body-less POSTs (`/tun/m/assign`, unassign) are sent with an empty chunked body (`data=iter(())`, `Transfer-Encoding: chunked`, no `Content-Length`): the proxy-fronted Colab frontend answered `Content-Length: 0` with 411 Length Required (upstream issue #270). `Client._uses_proxy` asks requests whether the URL goes through a proxy (environment, `NO_PROXY`, the session's own proxies); without one the request is unchanged. Unit-tested only; no forward proxy was available for a live test.
+2026-11-25: Merged upstream #277: `colab stop -s <name>` exits 1 when the named session does not exist (or has vanished from the backend), through `State.get_session`; `--all` with no sessions, `--orphans` and `--endpoint` are unchanged (#251).
 2026-11-20: `colab attach --endpoint ID [-s NAME]` saves a runtime that has no local session (opened in the Colab web UI, or by colab on another computer) as a local session, from the assignment's proxy URL and token (`/tun/m/assignments`), so every session command works on it. Default name `web-<first 6 of the id's last part>`; an endpoint that is already a session says so; an unknown endpoint exits 1; an existing name exits 2. The CLI starts its own kernel; `/content` is shared with the notebook. Tested live: a web UI runtime attached, then files uploaded with `colab upload`, over `colab ssh -- sh -c 'cat > ...'` and with Windows OpenSSH scp through `colab ssh --proxy-mode`; all three showed in the notebook's Files panel.
 2026-11-20: Listed the fork code that keys runtimes by `endpoint` and has to follow upstream #260 (Public API assign/unassign) once it lands; see TODO.
 2026-11-20: `colab stop --endpoint <id>` stops one runtime by the endpoint `colab sessions` lists, also one with no local session (`[?]`, e.g. opened in the Colab web UI); an endpoint of a local session stops that session as `-s` does, an unknown one exits 1, and it cannot be combined with `-s`, `--orphans` or `--all` (exit 2). The tray's Stop button uses it for such runtimes.
@@ -144,6 +146,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 - **`--all`**: Stops every local session that is still assigned on the server (`state.sync_sessions()`), one by one, then prints `Stopped N session(s).` It cannot be combined with `-s` or `--orphans` (exit 2).
 - **`--orphans [--yes]`**: Lists server-side runtimes with no local session and unassigns them after confirmation.
 - **`--endpoint <id>`**: Stops the one runtime with this endpoint (as `colab sessions` lists it), without asking, whether or not a local session knows it. If a local session has that endpoint it is stopped like `-s NAME` (kernel, backend, local state); an endpoint the server does not list exits 1. It must be used alone (exit 2 with `-s`, `--orphans` or `--all`).
+- **Missing sessions**: Stopping a specific session (`colab stop` or `colab stop -s <name>`) exits with code 1 if no matching active session exists. `colab stop --all` exits 0 when no sessions are active.
 
 ### 4. Session Listing (`colab sessions`)
 - **API**: `GET https://colab.research.google.com/tun/m/assignments` (based on `colab-agent` implementation).
@@ -182,6 +185,7 @@ TDD is mandatory for all session management features.
 ### 1. Mock Assignment API
 - **Test Case**: Verify `colab new` correctly parses a `PostAssignmentResponse` and stores it in the local `StateStore`.
 - **Test Case**: Verify `colab stop` sends a `POST` request with the correct XSRF token to the unassign endpoint.
+- **Test Case**: Verify `colab stop -s <missing>` prints a not-found error and exits with status 1 without calling unassign.
 - **Test Case**: Verify that the path provided via `-c` is correctly passed to the authentication flow.
 - **Mocking**: Use `unittest.mock` to intercept `requests.Session.request` and return simulated XSSI-prefixed JSON payloads matching the HAR traces.
 

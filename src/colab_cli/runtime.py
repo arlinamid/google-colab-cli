@@ -49,6 +49,50 @@ class SessionConnectionLost(RuntimeError):
 _WAIT_SLICE_SEC = 1.0
 # Kernel states that end any execution in progress.
 _KERNEL_GONE = frozenset({"dead", "restarting"})
+_DEFAULT_WS_PING_TIMEOUT = 20.0
+
+
+def _ws_ping_timeout(ping_interval: float) -> Optional[float]:
+    """Seconds to wait for a pong (COLAB_CLI_WS_PING_TIMEOUT); None turns it off.
+
+    websocket-client rejects a ping_timeout that is not below ping_interval.
+    """
+    try:
+        value = float(os.getenv("COLAB_CLI_WS_PING_TIMEOUT", _DEFAULT_WS_PING_TIMEOUT))
+    except ValueError:
+        value = _DEFAULT_WS_PING_TIMEOUT
+    if value <= 0:
+        return None
+    return min(value, ping_interval - 1) if ping_interval > 1 else None
+
+
+def _with_ping_timeout(client_class: type) -> type:
+    """Return a subclass of jupyter_kernel_client's websocket client whose
+    websocket also waits for pongs.
+
+    The library runs ``run_forever(ping_interval=..., reconnect=...)`` without
+    ``ping_timeout``, so a half-open connection (pings sent, no pong, no close)
+    is never noticed and `colab exec` waits forever while the runtime bills
+    (upstream discussion #283). With a ping timeout websocket-client closes the
+    socket, ``_on_close`` clears ``connection_ready``, and ``execute_code``
+    reports the lost connection.
+    """
+
+    class PingTimeoutWebSocketClient(client_class):
+        def _run_websocket(self) -> None:
+            sock = self.kernel_socket
+            timeout = _ws_ping_timeout(self.ping_interval)
+            if sock is not None and timeout:
+                run_forever = sock.run_forever
+
+                def run_with_ping_timeout(*args, **kwargs):
+                    kwargs.setdefault("ping_timeout", timeout)
+                    return run_forever(*args, **kwargs)
+
+                sock.run_forever = run_with_ping_timeout
+            super()._run_websocket()
+
+    return PingTimeoutWebSocketClient
 
 
 class ColabRuntime:
@@ -166,6 +210,11 @@ class ColabRuntime:
                     # Force _own_kernel to False. This prevents jupyter-kernel-client
                     # from automatically deleting the kernel when the client is closed or deleted.
                     self._kernel_client._own_kernel = False
+                    manager = self._kernel_client._manager
+                    if isinstance(manager.client_factory, type):
+                        manager.client_factory = _with_ping_timeout(
+                            manager.client_factory
+                        )
 
                     self._kernel_client.start()
                     self._apply_ws_hook()

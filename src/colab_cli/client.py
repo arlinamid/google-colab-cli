@@ -298,6 +298,20 @@ class Client:
             return v
         return v[len(XSSI_PREFIX) :]
 
+    def _uses_proxy(self, endpoint: str) -> bool:
+        """Whether requests would send ``endpoint`` through a proxy.
+
+        A forward proxy in front of Colab answers a POST that carries a
+        Content-Length, even 0, with 411 Length Required but passes a chunked
+        one (upstream issue #270), so body-less POSTs through a proxy are sent
+        with an empty chunked body. Without a proxy nothing changes.
+        """
+        proxies = requests.utils.get_environ_proxies(endpoint)
+        session_proxies = getattr(self.session, "proxies", None)
+        if isinstance(session_proxies, dict):
+            proxies = {**proxies, **session_proxies}
+        return bool(requests.utils.select_proxy(endpoint, proxies))
+
     def _issue_request(
         self,
         endpoint: str,
@@ -324,6 +338,13 @@ class Client:
             timeout = os.getenv("COLAB_CLI_REQUEST_TIMEOUT")
             if timeout:
                 kwargs["timeout"] = float(timeout)
+
+        if (
+            method == "POST"
+            and not any(k in kwargs for k in ("data", "json", "files"))
+            and self._uses_proxy(endpoint)
+        ):
+            kwargs["data"] = iter(())
 
         self.logger.debug(f"Request: {method} {endpoint}")
         self.logger.debug(f"Params: {params}")
