@@ -29,7 +29,7 @@ Google's CLI provisions runtimes and runs code on them from Linux and macOS. Thi
 
 Commands only in this fork: `colab tray`, `colab profile`, `colab job`, `colab inspect`, `colab history`, `colab secret`, `colab forward`, `colab share`, `colab keepalive`, `colab hf`, `colab clone`. Design notes: [docs/09_tray_and_profiles.md](docs/09_tray_and_profiles.md) (tray, profiles, progress), [docs/08_agent_feedback.md](docs/08_agent_feedback.md) (JSON results, jobs, inspect, cost, history).
 
-Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes, so Google's next release (0.8.1) still sorts above it. Google's changes are merged in when they are released, and sometimes before: 0.8.0.4 already has Google's commits up to 17 November 2026. See [CHANGELOG.md](CHANGELOG.md).
+Versions are numbered after the Google release they are based on: **0.8.0.N** is Google's 0.8.0 plus this fork's changes, so Google's next release (0.8.1) still sorts above it. Google's changes are merged in when they are released, and sometimes before: 0.8.0.6 already has Google's commits up to 25 November 2026 (#279). See [CHANGELOG.md](CHANGELOG.md).
 
 > [!NOTE]
 > **Platform support:** Linux, macOS, and Windows (PowerShell and cmd.exe). `colab ssh --proxy-mode` reads stdin with a blocking read so it works as an OpenSSH ProxyCommand under Windows OpenSSH.
@@ -68,7 +68,7 @@ For the tray panel add the `[tray]` extra (it installs Qt, PySide6, about 80 MB)
 uv tool install "google-colab-cli[tray] @ git+https://github.com/arlinamid/google-colab-cli"
 ```
 
-This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.4.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.3`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
+This installs the `main` branch, which holds the latest release (and documentation fixes made since). If `main` has moved on since the release, `colab version` shows a development version such as `0.8.0.7.dev1`; `colab update --install` replaces it with the next release. To install one release, add its tag (`git+https://github.com/arlinamid/google-colab-cli@v0.8.0.6`), or install its wheel from the [releases page](https://github.com/arlinamid/google-colab-cli/releases).
 
 `uv tool install google-colab-cli` / `pip install google-colab-cli` install Google's official release from PyPI instead, without this fork's changes.
 
