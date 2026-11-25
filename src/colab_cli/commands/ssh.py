@@ -941,6 +941,10 @@ def _ssh_base_args(
         "-o",
         f"UserKnownHostsFile={os.devnull}",
         "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        "-o",
         "LogLevel=ERROR",
     ]
     if identity:

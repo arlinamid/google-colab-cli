@@ -10,16 +10,17 @@ below corresponds to a tag of the same name.
 
 ## [Unreleased]
 
-### Added
-
-- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR #266 by Koji Shukawa, taken before Google merged it).
-
 ### Changed
 
 - **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream #277). `--all` with no sessions still exits 0.
 
+### Added
+
+- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR #266 by Koji Shukawa, taken before Google merged it).
+
 ### Fixed
 
+- **ssh:** `colab ssh -s B` no longer runs on session A's runtime when `~/.ssh/config` turns on connection sharing (`ControlMaster auto`); the CLI's own ssh and scp never share a connection (upstream discussion #247).
 - **files:** `colab upload`, `download`, `ls`, `rm`, `edit` and the tray's file manager no longer hang forever when the connection drops: each request gives up after 30 s without a connection or 300 s without data (upstream #279).
 - **exec:** Google's CLI now also exits 1 when the code raises (upstream #278). This fork already did; a notebook still runs its remaining cells unless you pass `--stop-on-error`.
 

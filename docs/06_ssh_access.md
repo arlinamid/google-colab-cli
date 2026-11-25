@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-25: `_ssh_base_args` passes `-o ControlMaster=no -o ControlPath=none` (upstream discussion #247). With `ControlMaster auto` under `Host *` in `~/.ssh/config`, every session resolved to the same socket (`root@colab-runtime-22`), so OpenSSH reused session A's master without running B's ProxyCommand and `colab ssh -s B` ran on A's runtime (and the persisted master held A's only SSH slot). Command-line options win over the config file; it applies to `colab ssh`, `-- CMD`, `forward` and scp (`--via ssh`). Windows OpenSSH 9.5 accepts both options. Own `Host <alias>` entries with `--proxy-mode` are unaffected.
 2026-11-23: Updated `integration/repro_windows_ssh/test.py` to check cached OAuth2 credentials via the OS `keyring` (`KEYRING_SERVICE_NAME` / `KEYRING_USERNAME`) instead of the removed `TOKEN_CONFIG_PATH`, and added portable import and prerequisite-skip regression tests in `tests/test_windows_ssh.py`.
 2026-11-20: A default key for `colab ssh` and `colab forward` without `-i`: `COLAB_CLI_SSH_IDENTITY`, else `ssh_identity` in `settings.json`, else `~/.ssh/id_ed25519.pub` / `id_ecdsa.pub` (`_default_identity`). The tray's SSH and forward buttons pass no `-i`, so a key with another name (e.g. `~/.ssh/colab_ed25519`) could not be used from there. The no-key message names the setting. Tested live: `colab ssh -- CMD` without `-i`, and the tray's SSH button on an attached web UI runtime.
 2026-11-20: Merged upstream `colab ssh --force` (#254): before connecting, it kills the runtime's existing SSH sessions through the kernel (`pkill -P $(pgrep -o -x sshd)`), for when a dead client keeps the session slot and the server answers 429. It works with the fork's interactive shell, `-N`/`-L` forwards, `-- CMD` and `--proxy-mode`.
@@ -139,6 +140,9 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
    On native Windows, the ProxyCommand uses `subprocess.list2cmdline` for
    CreateProcessW argument parsing; POSIX systems continue to use `shlex.join`.
    The local `UserKnownHostsFile` uses `os.devnull` (`nul` on Windows).
+   Connection multiplexing is turned off (`ControlMaster=no`, `ControlPath=none`):
+   a `ControlMaster auto` in `~/.ssh/config` would otherwise send every session
+   over the first session's socket, since all of them connect to `root@colab-runtime`.
 4. **`--proxy-mode` bridge**: Bridges the WebSocket ↔ stdin/stdout for use as an
    OpenSSH `ProxyCommand`. Honors every flag: `-s NAME` creates the session if
    missing (creation output routed to stderr so stdout stays the clean ssh byte

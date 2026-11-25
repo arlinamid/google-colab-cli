@@ -182,7 +182,10 @@ def test_ssh_without_cmd_builds_interactive_argv(mocker, extra):
     assert runner.invoke(app, ["ssh", "-s", "s1", *extra]).exit_code == 0
     proxy = [sys.executable, "-m", "colab_cli.cli", "ssh", "--proxy-mode"]
     proxy += ["-s", "s1", "--colab-internal-mode", "interactive"]
-    opts = f"StrictHostKeyChecking=no -o UserKnownHostsFile={os.devnull}"
+    opts = (
+        f"StrictHostKeyChecking=no -o UserKnownHostsFile={os.devnull} "
+        "-o ControlMaster=no -o ControlPath=none"
+    )
     assert call.call_args.args[0] == [
         "ssh",
         "-o",

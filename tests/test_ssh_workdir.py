@@ -92,3 +92,14 @@ def test_ssh_base_args_strips_pub_when_sibling_private_key_exists(
     args = ssh_module._ssh_base_args("proxy", str(pub))
     idx = args.index("-i")
     assert args[idx + 1] == str(priv if priv_exists else pub)
+
+
+def test_ssh_base_args_disable_connection_multiplexing():
+    """A `Host *` ControlMaster/ControlPath in ~/.ssh/config would give every
+    session the same socket (root@colab-runtime-22), so `colab ssh -s B` would
+    run over session A's master (upstream discussion #247). Command-line `-o`
+    options win over the config file."""
+    args = ssh_module._ssh_base_args("proxy", None)
+    opts = [args[i + 1] for i, a in enumerate(args) if a == "-o"]
+    assert "ControlMaster=no" in opts
+    assert "ControlPath=none" in opts
