@@ -12,47 +12,47 @@ below corresponds to a tag of the same name.
 
 ## [0.8.0.6] - 2026-11-25
 
-Sign out with `colab logout`, uploads of large files, and fixes for connections that drop without closing, `colab ssh` with OpenSSH connection sharing and `colab new` behind a proxy; Google's changes up to #279. Still based on Google's Colab CLI 0.8.0.
+Sign out with `colab logout`, uploads of large files, and fixes for connections that drop without closing, `colab ssh` with OpenSSH connection sharing and `colab new` behind a proxy; Google's changes up to [#279](https://github.com/googlecolab/google-colab-cli/pull/279). Still based on Google's Colab CLI 0.8.0.
 
 ### Changed
 
-- **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream #277). `--all` with no sessions still exits 0 (#24).
+- **stop:** `colab stop -s NAME` exits 1 when there is no such session, like the other commands that take `-s` (upstream [#277](https://github.com/googlecolab/google-colab-cli/pull/277)). `--all` with no sessions still exits 0 (#24).
 
 ### Added
 
-- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR #266 by Koji Shukawa, taken before Google merged it) (#24).
+- **auth:** `colab logout` signs you out so you can switch Google accounts: it removes the stored sign-in from the OS keyring and the runtime tokens cached in `sessions.json`, without stopping runtimes (they keep running on the old account, and it says so). With `--auth=adc` it prints the `gcloud` command to use instead (upstream PR [#266](https://github.com/googlecolab/google-colab-cli/pull/266) by Koji Shukawa, taken before Google merged it) (#24).
 
 ### Fixed
 
-- **files:** files larger than about 75 MB can be uploaded: Colab refused requests over 100 MB with 400 Bad Request. `colab upload`, `upload -r`, `colab edit` and the tray's file manager send such a file in 16 MB parts; smaller files go in one request as before. A part whose connection drops is sent again (twice at most) without writing it twice; if it still fails, the message says the remote file may be incomplete (upstream PR #272 by yschoi9733, taken before Google merged it) (#24).
-- **new:** `colab new` and `colab stop` work behind an HTTP(S) proxy (`HTTPS_PROXY`), where Colab answered 411 Length Required: requests through a proxy that have no body are sent without a `Content-Length` header. Without a proxy nothing changes (upstream issue #270) (#24).
-- **exec:** a connection that drops without closing (a network that stops passing data) no longer keeps `colab exec` and `colab repl` waiting forever, with `--timeout 0` too, while the runtime uses compute units: the CLI checks that its pings are answered and reports the lost session (exit 3) about 80 s at most after the drop. `COLAB_CLI_WS_PING_TIMEOUT` sets the wait, `0` turns it off (upstream discussion #283) (#24).
-- **ssh:** `colab ssh -s B` no longer runs on session A's runtime when `~/.ssh/config` turns on connection sharing (`ControlMaster auto`); the CLI's own ssh and scp never share a connection (upstream discussion #247) (#24).
-- **files:** `colab upload`, `download`, `ls`, `rm`, `edit` and the tray's file manager no longer hang forever when the connection drops: each request gives up after 30 s without a connection or 300 s without data (upstream #279) (#24).
-- **exec:** Google's CLI now also exits 1 when the code raises (upstream #278). This fork already did; a notebook still runs its remaining cells unless you pass `--stop-on-error` (#24).
+- **files:** files larger than about 75 MB can be uploaded: Colab refused requests over 100 MB with 400 Bad Request. `colab upload`, `upload -r`, `colab edit` and the tray's file manager send such a file in 16 MB parts; smaller files go in one request as before. A part whose connection drops is sent again (twice at most) without writing it twice; if it still fails, the message says the remote file may be incomplete (upstream PR [#272](https://github.com/googlecolab/google-colab-cli/pull/272) by yschoi9733, taken before Google merged it) (#24).
+- **new:** `colab new` and `colab stop` work behind an HTTP(S) proxy (`HTTPS_PROXY`), where Colab answered 411 Length Required: requests through a proxy that have no body are sent without a `Content-Length` header. Without a proxy nothing changes (upstream issue [#270](https://github.com/googlecolab/google-colab-cli/issues/270)) (#24).
+- **exec:** a connection that drops without closing (a network that stops passing data) no longer keeps `colab exec` and `colab repl` waiting forever, with `--timeout 0` too, while the runtime uses compute units: the CLI checks that its pings are answered and reports the lost session (exit 3) about 80 s at most after the drop. `COLAB_CLI_WS_PING_TIMEOUT` sets the wait, `0` turns it off (upstream discussion [#283](https://github.com/googlecolab/google-colab-cli/discussions/283)) (#24).
+- **ssh:** `colab ssh -s B` no longer runs on session A's runtime when `~/.ssh/config` turns on connection sharing (`ControlMaster auto`); the CLI's own ssh and scp never share a connection (upstream discussion [#247](https://github.com/googlecolab/google-colab-cli/discussions/247)) (#24).
+- **files:** `colab upload`, `download`, `ls`, `rm`, `edit` and the tray's file manager no longer hang forever when the connection drops: each request gives up after 30 s without a connection or 300 s without data (upstream [#279](https://github.com/googlecolab/google-colab-cli/pull/279)) (#24).
+- **exec:** Google's CLI now also exits 1 when the code raises (upstream [#278](https://github.com/googlecolab/google-colab-cli/pull/278)). This fork already did; a notebook still runs its remaining cells unless you pass `--stop-on-error` (#24).
 
 ## [0.8.0.5] - 2026-11-20
 
-A file manager in the tray, folder upload and download, and runtimes opened in the Colab web UI usable and stoppable from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to #259. Still based on Google's Colab CLI 0.8.0.
+A file manager in the tray, folder upload and download, and runtimes opened in the Colab web UI usable and stoppable from the CLI and the tray; fixes for runtimes that were left running, a `colab exec` that could hang for an hour, and Google's changes up to [#259](https://github.com/googlecolab/google-colab-cli/pull/259). Still based on Google's Colab CLI 0.8.0.
 
 ### Added
 
 - **tray:** a two-pane file manager, like Total Commander, from the Files button of a runtime's card: this computer on the left (drive list), the runtime's `/content` on the right. Copy by drag and drop, the Upload / Download buttons or F5; F7 new folder, F8 delete (local files go to the recycle bin), Enter opens, Backspace goes up; a command line runs commands in the runtime's folder. Transfers go over the contents API (no key) or SSH / scp, with a progress bar (files done / total) and a Cancel button. If the runtime stops or the connection ends, a banner says so and only the local pane stays usable (docs/09, section 5). (#23)
-- **files:** `colab upload -r` and `colab download -r` copy whole folders, empty ones included (upstream PR #267 by Koji Shukawa, taken before Google merged it, with its review applied). (#22)
+- **files:** `colab upload -r` and `colab download -r` copy whole folders, empty ones included (upstream PR [#267](https://github.com/googlecolab/google-colab-cli/pull/267) by Koji Shukawa, taken before Google merged it, with its review applied). (#22)
 - **files:** `colab ls --json`, `colab mkdir`, `colab rm -r` (a folder with everything in it), `--via ssh` on `upload`/`download` (copies with scp through the SSH bridge) and `--progress` (a line per copied file). (#23)
 - **ssh:** a default SSH key for `colab ssh` and `colab forward` without `-i`: `ssh_identity` in `settings.json` or `COLAB_CLI_SSH_IDENTITY`. The tray's SSH and forward buttons use it, so a key not named `id_ed25519` / `id_ecdsa` works there too. (#21)
 - **attach:** `colab attach --endpoint ID` uses a runtime opened elsewhere, such as in the Colab web UI, as a local session, so you can upload files to a notebook's runtime with `colab upload`, `colab ssh` or scp, or run code on it with `colab exec` (in the CLI's own kernel; `/content` is shared). The tray's card for such a runtime has a Connect button. (#20)
-- **stop:** `colab stop --endpoint ID` stops one runtime by the endpoint `colab sessions` lists, also one with no local session, such as a runtime opened in the Colab web UI. A local session's endpoint stops that session like `-s`; an unknown endpoint exits 1 (upstream issue #263). (#14)
+- **stop:** `colab stop --endpoint ID` stops one runtime by the endpoint `colab sessions` lists, also one with no local session, such as a runtime opened in the Colab web UI. A local session's endpoint stops that session like `-s`; an unknown endpoint exits 1 (upstream issue [#263](https://github.com/googlecolab/google-colab-cli/issues/263)). (#14)
 - **tray:** a runtime with no local session can be stopped from the panel: its card shows the endpoint instead of `?`, says it may be open in the Colab web UI or on another computer, and has a Stop button. Before, the card had no buttons. (#14)
-- **ssh:** `colab ssh --force` kills the runtime's stale SSH sessions before connecting, for when a dead client holds the slot and the server answers 429 (upstream #254). It works with `-L`, `-N`, `-- CMD` and `--proxy-mode`. (#18)
+- **ssh:** `colab ssh --force` kills the runtime's stale SSH sessions before connecting, for when a dead client holds the slot and the server answers 429 (upstream [#254](https://github.com/googlecolab/google-colab-cli/pull/254)). It works with `-L`, `-N`, `-- CMD` and `--proxy-mode`. (#18)
 
 ### Fixed
 
-- **new:** when the request for a runtime timed out, the runtime Colab created afterwards was not saved and kept using compute units as a `[?]` orphan. `colab new` and `colab run` now check once more and save it; if there is still none, one line says how to find and stop it instead of a traceback (upstream issue #263). (#13)
-- **exec:** a slow kernel connection no longer loses the code and hangs the CLI. `colab exec` and `colab repl` wait for the connection to open (`COLAB_CLI_WS_CONNECT_TIMEOUT`, default 60 s) before sending anything, say so if it does not, and always close it, so the process exits (upstream discussion #264, which saw a 71-minute hang). (#16)
+- **new:** when the request for a runtime timed out, the runtime Colab created afterwards was not saved and kept using compute units as a `[?]` orphan. `colab new` and `colab run` now check once more and save it; if there is still none, one line says how to find and stop it instead of a traceback (upstream issue [#263](https://github.com/googlecolab/google-colab-cli/issues/263)). (#13)
+- **exec:** a slow kernel connection no longer loses the code and hangs the CLI. `colab exec` and `colab repl` wait for the connection to open (`COLAB_CLI_WS_CONNECT_TIMEOUT`, default 60 s) before sending anything, say so if it does not, and always close it, so the process exits (upstream discussion [#264](https://github.com/googlecolab/google-colab-cli/discussions/264), which saw a 71-minute hang). (#16)
 - **update:** the upgrade notice shown around other commands goes to stderr. With an older install it was printed into the JSON of `colab exec --json`, `colab run --json` and `colab tray --snapshot --json`, which could then not be read. (#17)
 - **tray:** the stop dialog wraps its text at a fixed width and stays on the screen; a card with a long detail line no longer cuts off its last line and buttons. (#14)
-- **examples:** the fine-tuning example marks its imports after the runtime `pip install` (upstream #222). (#18)
+- **examples:** the fine-tuning example marks its imports after the runtime `pip install` (upstream [#222](https://github.com/googlecolab/google-colab-cli/pull/222)). (#18)
 - **tray:** after Connect on a web UI runtime the panel looked empty: an idle card with no detail line was sized to about 1 px. (#21)
 
 ## [0.8.0.4] - 2026-11-18
@@ -61,8 +61,8 @@ Google's changes since 0.8.0 merged in (up to 17 November 2026, before Google's 
 
 ### Added
 
-- **stop:** `colab stop --all` stops every local session the server still has (upstream #256). It sits next to this fork's `--orphans`, which stops the server's runtimes that have no local session; the two cannot be combined with each other or with `-s` (exit 2). (#12)
-- **api:** `--public-api` (or `COLAB_CLI_PUBLIC_API=1`, or `use_public_api` in `settings.json`) lists runtimes through Google's new Colab Public API (`colaboratory.googleapis.com`) instead of the tunnel API; off by default, and creating or stopping runtimes still uses the tunnel API. The hidden `colab test-public-api` checks which of the two your credentials can reach, and a 401/403 error says which flag to try. Google's API currently refuses this CLI's sign-in (403), so leave it off for now (upstream #238). (#12)
+- **stop:** `colab stop --all` stops every local session the server still has (upstream [#256](https://github.com/googlecolab/google-colab-cli/pull/256)). It sits next to this fork's `--orphans`, which stops the server's runtimes that have no local session; the two cannot be combined with each other or with `-s` (exit 2). (#12)
+- **api:** `--public-api` (or `COLAB_CLI_PUBLIC_API=1`, or `use_public_api` in `settings.json`) lists runtimes through Google's new Colab Public API (`colaboratory.googleapis.com`) instead of the tunnel API; off by default, and creating or stopping runtimes still uses the tunnel API. The hidden `colab test-public-api` checks which of the two your credentials can reach, and a 401/403 error says which flag to try. Google's API currently refuses this CLI's sign-in (403), so leave it off for now (upstream [#238](https://github.com/googlecolab/google-colab-cli/pull/238)). (#12)
 - **tray:** an About window, from the tray menu or a click on the panel's logo: the version, what the fork adds, links to the fork, its releases and Google's original, and the license. (#12)
 
 ### Changed
@@ -73,9 +73,9 @@ Google's changes since 0.8.0 merged in (up to 17 November 2026, before Google's 
 
 ### Fixed
 
-- **auth:** signing in no longer fails when you approve only some of the requested permissions; the CLI keeps the permissions you granted (upstream #235). (#12)
-- **auth:** `--auth=adc` without Application Default Credentials prints the `gcloud auth application-default login --scopes=...` command to run instead of a traceback, and the README names `oauth2` as the default (upstream #245). (#12)
-- **deps:** tornado 6.6.1 (upstream #246). (#12)
+- **auth:** signing in no longer fails when you approve only some of the requested permissions; the CLI keeps the permissions you granted (upstream [#235](https://github.com/googlecolab/google-colab-cli/pull/235)). (#12)
+- **auth:** `--auth=adc` without Application Default Credentials prints the `gcloud auth application-default login --scopes=...` command to run instead of a traceback, and the README names `oauth2` as the default (upstream [#245](https://github.com/googlecolab/google-colab-cli/pull/245)). (#12)
+- **deps:** tornado 6.6.1 (upstream [#246](https://github.com/googlecolab/google-colab-cli/pull/246)). (#12)
 
 ## [0.8.0.3] - 2026-11-13
 
@@ -130,24 +130,24 @@ Now based on Google's Colab CLI 0.8.0. The version is Google's base version plus
 
 ### Changed
 
-- **exec, run:** `--timeout` is now an idle limit: it fails only after that many seconds without output, so code that keeps printing is never cut off. The wait no longer polls the kernel library's busy loop (upstream #185). Unlike Google's CLI, the default is still no limit, and a timeout still interrupts the kernel so the code stops too.
-- **ssh:** `--identity/-i` accepts a public key (`.pub`) as well as a private key; the matching `.pub` file is read directly when present (upstream #225).
-- **auth:** `--auth=adc` no longer runs `gcloud config get-value project` on every command (upstream #218).
+- **exec, run:** `--timeout` is now an idle limit: it fails only after that many seconds without output, so code that keeps printing is never cut off. The wait no longer polls the kernel library's busy loop (upstream [#185](https://github.com/googlecolab/google-colab-cli/pull/185)). Unlike Google's CLI, the default is still no limit, and a timeout still interrupts the kernel so the code stops too.
+- **ssh:** `--identity/-i` accepts a public key (`.pub`) as well as a private key; the matching `.pub` file is read directly when present (upstream [#225](https://github.com/googlecolab/google-colab-cli/pull/225)).
+- **auth:** `--auth=adc` no longer runs `gcloud config get-value project` on every command (upstream [#218](https://github.com/googlecolab/google-colab-cli/pull/218)).
 
 ### Added
 
-- **auth:** on Linux, a warning when the keyring collection is locked, so you know why the CLI is waiting on an unlock prompt (upstream #204).
+- **auth:** on Linux, a warning when the keyring collection is locked, so you know why the CLI is waiting on an unlock prompt (upstream [#204](https://github.com/googlecolab/google-colab-cli/pull/204)).
 
 ### Removed
 
-- **console:** **BREAKING:** `colab console` is removed, following Google's CLI (upstream #205). Use `colab ssh -s NAME` for an interactive shell and `colab ssh -s NAME -- CMD` for one command; where ssh can't work, pipe `!`-prefixed shell commands to `colab exec -s NAME`.
+- **console:** **BREAKING:** `colab console` is removed, following Google's CLI (upstream [#205](https://github.com/googlecolab/google-colab-cli/pull/205)). Use `colab ssh -s NAME` for an interactive shell and `colab ssh -s NAME -- CMD` for one command; where ssh can't work, pipe `!`-prefixed shell commands to `colab exec -s NAME`.
 
 ### Fixed
 
-- **security:** the debug log, `sessions.json`, `settings.json` and session history files are created readable only by their owner, and older copies are tightened the next time the CLI uses them (upstream #196).
-- **security:** access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies are no longer written to the debug log. Logs from older versions may contain credentials and can be deleted (upstream #196).
-- **download:** notebooks downloaded as JSON are valid JSON again (upstream #232).
-- **new, run, ssh:** unknown `--gpu`/`--tpu` values are rejected with the supported list instead of silently picking A100 or v6e1 (upstream #211).
+- **security:** the debug log, `sessions.json`, `settings.json` and session history files are created readable only by their owner, and older copies are tightened the next time the CLI uses them (upstream [#196](https://github.com/googlecolab/google-colab-cli/pull/196)).
+- **security:** access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies are no longer written to the debug log. Logs from older versions may contain credentials and can be deleted (upstream [#196](https://github.com/googlecolab/google-colab-cli/pull/196)).
+- **download:** notebooks downloaded as JSON are valid JSON again (upstream [#232](https://github.com/googlecolab/google-colab-cli/pull/232)).
+- **new, run, ssh:** unknown `--gpu`/`--tpu` values are rejected with the supported list instead of silently picking A100 or v6e1 (upstream [#211](https://github.com/googlecolab/google-colab-cli/pull/211)).
 - **security:** when a file command fails (`upload`, `download`, `ls`, `rm`), the error no longer shows the runtime proxy token from the request URL.
 - **ssh, forward (Windows binary):** closing the terminal tab or force-killing the standalone `colab.exe` also ends ssh.exe and its proxy. Before, they kept running in the background.
 - **ssh, forward:** without an SSH key, `colab ssh` and `colab forward` exit 2 with a clear message before creating a runtime, instead of ssh's exit 255 after one was created. The message names other ed25519/ECDSA keys found in `~/.ssh` and how to pass one with `-i`.
@@ -223,21 +223,21 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
 
 ### Changed
 
-- **deps:** Bump cryptography from 49.0.0 to 50.0.0 (#98), and pyasn1 from 0.6.3 to 0.6.4 (#87).
-- **lockfile:** Upgrade lockfile dependencies via `uv lock --upgrade`. (#67)
-- **skill:** Move the CLI help skill details into a dedicated `SKILL.md`. (#55)
-- **docs:** Update `AGENTS.md` with instructions for the release tagging workflow. (#66)
+- **deps:** Bump cryptography from 49.0.0 to 50.0.0 ([#98](https://github.com/googlecolab/google-colab-cli/pull/98)), and pyasn1 from 0.6.3 to 0.6.4 ([#87](https://github.com/googlecolab/google-colab-cli/pull/87)).
+- **lockfile:** Upgrade lockfile dependencies via `uv lock --upgrade`. ([#67](https://github.com/googlecolab/google-colab-cli/pull/67))
+- **skill:** Move the CLI help skill details into a dedicated `SKILL.md`. ([#55](https://github.com/googlecolab/google-colab-cli/pull/55))
+- **docs:** Update `AGENTS.md` with instructions for the release tagging workflow. ([#66](https://github.com/googlecolab/google-colab-cli/pull/66))
 
 ### Added
 
-- **ssh:** Add `colab ssh` command to provide secure SSH-over-WebSocket direct access to the Colab runtime VM. (#88)
-- **execution:** Add `--env KEY=VALUE` flag to `colab run` and `colab exec` commands to allow injecting custom environment variables into the running kernel. (#65)
-- **session:** Add `--high-mem` flag to machine shape selection when creating a new session to support high-RAM resources. (#105)
+- **ssh:** Add `colab ssh` command to provide secure SSH-over-WebSocket direct access to the Colab runtime VM. ([#88](https://github.com/googlecolab/google-colab-cli/pull/88))
+- **execution:** Add `--env KEY=VALUE` flag to `colab run` and `colab exec` commands to allow injecting custom environment variables into the running kernel. ([#65](https://github.com/googlecolab/google-colab-cli/pull/65))
+- **session:** Add `--high-mem` flag to machine shape selection when creating a new session to support high-RAM resources. ([#105](https://github.com/googlecolab/google-colab-cli/pull/105))
 
 ### Fixed
 
-- **session:** Surface a friendly error message on 412 GPU/TPU allocation failure instead of printing a raw traceback. (#112)
-- **runtime:** Support both `ColabKernelClient` and standard `KernelClient` in the runtime layer to improve compatibility across environments. (#95)
+- **session:** Surface a friendly error message on 412 GPU/TPU allocation failure instead of printing a raw traceback. ([#112](https://github.com/googlecolab/google-colab-cli/pull/112))
+- **runtime:** Support both `ColabKernelClient` and standard `KernelClient` in the runtime layer to improve compatibility across environments. ([#95](https://github.com/googlecolab/google-colab-cli/pull/95))
 
 ## [0.6.0] - 2026-06-16
 
@@ -248,7 +248,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   `redirect_uri=https://sdk.cloud.google.com/applicationdefaultauthcode.html`
   and `token_usage=remote`, then reads the pasted code from stdin. This works
   in headless/remote environments where a browser cannot reach a local
-  callback port. (#54)
+  callback port. ([#54](https://github.com/googlecolab/google-colab-cli/pull/54))
 
 ### Added
 
@@ -257,7 +257,7 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   rendered as Markdown, following a `text/markdown > text/html > text/plain`
   priority; `text/plain` is wrapped with `Text.from_ansi` to preserve embedded
   ANSI escapes. Applied consistently across `exec`, `console`/`repl`, and
-  automation call sites. (#58)
+  automation call sites. ([#58](https://github.com/googlecolab/google-colab-cli/pull/58))
 
 ### Fixed
 
@@ -270,13 +270,13 @@ First release of this fork: Google's Colab CLI 0.7.5 with Windows fixes and extr
   causing their sessions to be idle-pruned within minutes. The TFE ping needs
   no project entitlement; because the VM often does not answer on this path, a
   `ReadTimeout` is treated as success while genuine HTTP errors propagate.
-  (#14, #61)
+  ([#14](https://github.com/googlecolab/google-colab-cli/issues/14), [#61](https://github.com/googlecolab/google-colab-cli/pull/61))
 
 ### Removed
 
 - Dead grpc-web client-registry / API-key code path and the now-irrelevant
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
-  superseded by the TFE keep-alive ping. (#61)
+  superseded by the TFE keep-alive ping. ([#61](https://github.com/googlecolab/google-colab-cli/pull/61))
 
 [0.8.0.6]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.6
 [0.8.0.5]: https://github.com/arlinamid/google-colab-cli/releases/tag/v0.8.0.5
